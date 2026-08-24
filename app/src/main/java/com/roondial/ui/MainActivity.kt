@@ -1,0 +1,230 @@
+package com.roondial.ui
+
+import android.app.Activity
+import android.app.AlertDialog
+import android.graphics.BitmapFactory
+import android.graphics.Color
+import android.os.Bundle
+import android.text.InputType
+import android.util.Log
+import android.view.Gravity
+import android.view.ViewGroup
+import android.view.WindowManager
+import android.widget.EditText
+import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.TextView
+import android.widget.Toast
+import com.roondial.roon.RoonClient
+import com.roondial.roon.Zone
+import java.net.HttpURLConnection
+import java.net.URL
+import java.util.concurrent.Executors
+
+class MainActivity : Activity(), RoonClient.Listener, DialView.Callbacks {
+
+    companion object {
+        private const val TAG = "RoonDial"
+        private const val DEFAULT_PORT = 9330
+    }
+
+    private lateinit var dial: DialView
+    private lateinit var statusView: TextView
+    private lateinit var client: RoonClient
+
+    private var zones: List<Zone> = emptyList()
+    private var artKey: String? = null
+    private val artLoader = Executors.newSingleThreadExecutor()
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+
+        dial = DialView(this).apply { callbacks = this@MainActivity }
+        statusView = TextView(this).apply {
+            setTextColor(Color.parseColor("#8B96A2"))
+            textSize = 12f
+            gravity = Gravity.CENTER
+            setPadding(dp(20), dp(6), dp(20), dp(14))
+        }
+
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.parseColor("#07080A"))
+            addView(
+                FrameLayout(this@MainActivity).apply { addView(dial) },
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
+                )
+            )
+            addView(
+                statusView,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+            )
+        }
+        setContentView(root)
+
+        client = RoonClient(this)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        client.listener = this
+        client.start()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        client.listener = null
+        client.stop()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        artLoader.shutdownNow()
+    }
+
+    private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
+
+    // ------------------------------------------------------------- listener
+
+    override fun onStatus(status: RoonClient.Status) {
+        val text = when (status.stage) {
+            RoonClient.Stage.IDLE -> status.detail ?: "Idle"
+            RoonClient.Stage.DISCOVERING -> "Looking for a Roon Core…"
+            RoonClient.Stage.CONNECTING -> status.detail ?: "Connecting…"
+            RoonClient.Stage.AWAITING_APPROVAL ->
+                "Waiting for approval — Roon → Settings → Extensions → Enable “Dial for Roon”"
+            RoonClient.Stage.CONNECTED -> status.detail ?: "Connected"
+            RoonClient.Stage.ERROR -> status.detail ?: "Disconnected"
+        }
+        statusView.text = text
+        if (zones.isEmpty()) dial.setStatus(text)
+    }
+
+    override fun onZones(zones: List<Zone>, selected: Zone?) {
+        this.zones = zones
+        dial.setZone(selected)
+        loadArtwork(selected?.nowPlaying?.imageKey)
+    }
+
+    // ----------------------------------------------------------- dial input
+
+    override fun onVolumeSteps(steps: Int) = client.changeVolumeSteps(steps)
+
+    override fun onPlayPause() = client.control("playpause")
+
+    override fun onNext() = client.control("next")
+
+    override fun onPrevious() = client.control("previous")
+
+    override fun onMuteTapped() = client.toggleMute()
+
+    override fun onZoneTapped() = showZonePicker()
+
+    override fun onLongPress() = showMenu()
+
+    // -------------------------------------------------------------- dialogs
+
+    private fun showZonePicker() {
+        if (zones.isEmpty()) {
+            Toast.makeText(this, "No zones yet", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val labels = zones.map { zone ->
+            val marker = if (zone.isPlaying) "▶ " else ""
+            val volume = zone.primaryVolume?.let { "  ·  ${it.format()}" } ?: "  ·  fixed volume"
+            marker + zone.displayName + volume
+        }.toTypedArray()
+
+        AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setTitle("Zone")
+            .setItems(labels) { _, which -> client.selectZone(zones[which].zoneId) }
+            .show()
+    }
+
+    private fun showMenu() {
+        val options = arrayOf(
+            "Choose zone",
+            "Reconnect",
+            "Find Core again",
+            "Enter Core address…",
+            "About"
+        )
+        AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setTitle("Dial for Roon")
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> showZonePicker()
+                    1 -> { client.stop(); client.start() }
+                    2 -> client.rediscover()
+                    3 -> showManualAddress()
+                    4 -> showAbout()
+                }
+            }
+            .show()
+    }
+
+    private fun showManualAddress() {
+        val input = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+            hint = "192.168.1.10:$DEFAULT_PORT"
+            setText(client.currentHost?.let { "$it:${client.currentPort}" } ?: "")
+            setPadding(dp(24), dp(16), dp(24), dp(8))
+        }
+        AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setTitle("Roon Core address")
+            .setMessage("Host and port of the Core's extension API. The port is normally 9330.")
+            .setView(input)
+            .setPositiveButton("Connect") { _, _ ->
+                val raw = input.text.toString().trim()
+                if (raw.isEmpty()) return@setPositiveButton
+                val host = raw.substringBefore(':')
+                val port = raw.substringAfter(':', "").toIntOrNull() ?: DEFAULT_PORT
+                client.connectTo(host, port)
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun showAbout() {
+        AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setTitle("Dial for Roon")
+            .setMessage(
+                "Connects directly to your Roon Core as an extension — no bridge or " +
+                    "companion service.\n\n" +
+                    "Sweep the ring to change volume. Tap the zone name to switch zones, " +
+                    "tap the volume readout to mute, long-press anywhere for this menu.\n\n" +
+                    "Core: ${client.currentHost ?: "not connected"}"
+            )
+            .setPositiveButton("OK", null)
+            .show()
+    }
+
+    // ------------------------------------------------------------- artwork
+
+    private fun loadArtwork(imageKey: String?) {
+        if (imageKey == artKey) return
+        artKey = imageKey
+        if (imageKey == null) {
+            dial.setArtwork(null)
+            return
+        }
+        val url = client.imageUrl(imageKey, 720) ?: return
+        artLoader.execute {
+            try {
+                val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 5000
+                    readTimeout = 8000
+                }
+                val bitmap = conn.inputStream.use { BitmapFactory.decodeStream(it) }
+                runOnUiThread { if (artKey == imageKey) dial.setArtwork(bitmap) }
+            } catch (e: Exception) {
+                Log.w(TAG, "artwork fetch failed: ${e.message}")
+            }
+        }
+    }
+}
