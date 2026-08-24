@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The Roon extension API is an unencrypted WebSocket (ws://) on the local
+  network, so cleartext has to be permitted. Roon exposes no TLS endpoint for
+  extensions, and traffic never leaves the LAN.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
