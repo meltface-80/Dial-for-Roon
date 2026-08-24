@@ -29,7 +29,7 @@ import java.util.concurrent.TimeUnit
  *
  * The token is persisted per Core id, so approval only ever happens once.
  */
-class RoonClient(context: Context) {
+class RoonClient(context: Context) : ZoneControl {
 
     companion object {
         private const val TAG = "RoonClient"
@@ -85,23 +85,28 @@ class RoonClient(context: Context) {
     private var running = false
     private var backoffMs = 1000L
 
-    var listener: Listener? = null
-        set(value) {
-            field = value
-            value?.let { l ->
-                val zones = zonesSnapshot
-                val snapshot = selectedSnapshot
-                main.post {
-                    l.onStatus(status)
-                    l.onZones(zones, snapshot)
-                }
-            }
+    private val listeners = java.util.concurrent.CopyOnWriteArrayList<Listener>()
+
+    /** Replays the current state to the new listener so it starts in sync. */
+    fun addListener(listener: Listener) {
+        listeners.addIfAbsent(listener)
+        val zones = zonesSnapshot
+        val snapshot = selectedSnapshot
+        val current = status
+        main.post {
+            listener.onStatus(current)
+            listener.onZones(zones, snapshot)
         }
+    }
+
+    fun removeListener(listener: Listener) {
+        listeners.remove(listener)
+    }
 
     private var status = Status(Stage.IDLE)
         set(value) {
             field = value
-            main.post { listener?.onStatus(value) }
+            main.post { listeners.forEach { it.onStatus(value) } }
         }
 
     val currentHost: String? get() = host
@@ -124,6 +129,16 @@ class RoonClient(context: Context) {
             pending.clear()
         }
         releaseMulticastLock()
+    }
+
+    /** Drop the current socket and connect again to the same Core. */
+    fun reconnect() {
+        net.post {
+            socket?.close(1000, "reconnect")
+            socket = null
+            backoffMs = 1000L
+            if (running) connectOrDiscover()
+        }
     }
 
     /** Forget the saved Core address and start discovery from scratch. */
@@ -325,10 +340,10 @@ class RoonClient(context: Context) {
         val sel = zoneStore.byId(selectedZoneId)
         selectedSnapshot = sel
         zonesSnapshot = all
-        main.post { listener?.onZones(all, sel) }
+        main.post { listeners.forEach { it.onZones(all, sel) } }
     }
 
-    fun selectedZone(): Zone? = selectedSnapshot
+    override fun selectedZone(): Zone? = selectedSnapshot
 
     fun selectZone(zoneId: String) {
         net.post {
@@ -341,7 +356,7 @@ class RoonClient(context: Context) {
     // -------------------------------------------------------- transport verbs
 
     /** control: "play", "pause", "playpause", "stop", "previous", "next". */
-    fun control(control: String) {
+    override fun control(control: String) {
         val zone = selectedZone() ?: return
         net.post {
             sendRequest(
@@ -355,7 +370,7 @@ class RoonClient(context: Context) {
      * Volume is per output. `relative_step` moves by whole steps of whatever
      * the device's native scale is, which is what a detented ring wants.
      */
-    fun changeVolumeSteps(steps: Int) {
+    override fun changeVolumeSteps(steps: Int) {
         if (steps == 0) return
         val zone = selectedZone() ?: return
         net.post {
@@ -377,17 +392,36 @@ class RoonClient(context: Context) {
     }
 
     fun toggleMute() {
+        val muted = selectedZone()?.primaryVolume?.isMuted ?: return
+        setMuted(!muted)
+    }
+
+    override fun setMuted(muted: Boolean) {
         val zone = selectedZone() ?: return
-        val muted = zone.primaryVolume?.isMuted ?: return
         net.post {
             for (out in zone.volumeOutputs) {
                 sendRequest(
                     SERVICE_TRANSPORT, "mute",
                     JSONObject()
                         .put("output_id", out.outputId)
-                        .put("how", if (muted) "unmute" else "mute")
+                        .put("how", if (muted) "mute" else "unmute")
                 )
             }
+        }
+    }
+
+    /** how is "relative" (seconds from the current position) or "absolute". */
+    override fun seek(seconds: Long, how: String) {
+        val zone = selectedZone() ?: return
+        if (!zone.isSeekAllowed) return
+        net.post {
+            sendRequest(
+                SERVICE_TRANSPORT, "seek",
+                JSONObject()
+                    .put("zone_or_output_id", zone.zoneId)
+                    .put("how", how)
+                    .put("seconds", seconds)
+            )
         }
     }
 
@@ -395,7 +429,7 @@ class RoonClient(context: Context) {
      * Album art. The image service is also reachable over plain HTTP on the
      * same host and port, which lets any image loader fetch it directly.
      */
-    fun imageUrl(imageKey: String, size: Int): String? {
+    override fun imageUrl(imageKey: String, size: Int): String? {
         val h = host ?: return null
         if (port <= 0) return null
         return "http://$h:$port/api/image/$imageKey" +
@@ -455,7 +489,7 @@ class RoonClient(context: Context) {
                 selectedSnapshot = null
                 zonesSnapshot = emptyList()
                 status = Status(Stage.ERROR, coreName, "Lost connection: ${t.message}")
-                main.post { listener?.onZones(emptyList(), null) }
+                main.post { listeners.forEach { it.onZones(emptyList(), null) } }
                 scheduleReconnect()
             }
         }
@@ -469,7 +503,7 @@ class RoonClient(context: Context) {
                 selectedSnapshot = null
                 zonesSnapshot = emptyList()
                 status = Status(Stage.IDLE, coreName, "Disconnected")
-                main.post { listener?.onZones(emptyList(), null) }
+                main.post { listeners.forEach { it.onZones(emptyList(), null) } }
                 scheduleReconnect()
             }
         }
