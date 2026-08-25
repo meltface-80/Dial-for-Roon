@@ -63,6 +63,21 @@ class DialView @JvmOverloads constructor(
         private const val PROGRESS = 0xFF3C77A8.toInt()
     }
 
+    /**
+     * Draws for a home-screen widget rather than the app.
+     *
+     * A widget is a bitmap behind tap targets: there is no gesture to follow,
+     * so the ring gains small +/- marks to show that volume is tappable, and
+     * the second-by-second progress arc is dropped because redrawing and
+     * re-sending the whole image every second is not what a widget is for. The
+     * background is left transparent so the widget's own rounded corners show.
+     */
+    var widgetMode: Boolean = false
+        set(value) {
+            field = value
+            invalidate()
+        }
+
     interface Callbacks {
         fun onVolumeSteps(steps: Int)
         fun onPlayPause()
@@ -163,14 +178,43 @@ class DialView @JvmOverloads constructor(
     // ------------------------------------------------------------- rendering
 
     override fun onDraw(canvas: Canvas) {
-        canvas.drawColor(BG)
+        if (!widgetMode) canvas.drawColor(BG)
         val z = zone
 
         drawRing(canvas, z)
-        drawProgress(canvas, z)
+        if (!widgetMode) drawProgress(canvas, z)
         drawArtwork(canvas)
         drawText(canvas, z)
         drawTransport(canvas, z)
+        if (widgetMode) drawVolumeHints(canvas, z)
+    }
+
+    /**
+     * On the widget the ring cannot be swept, so the two halves of it are tap
+     * targets instead. These mark them.
+     */
+    private fun drawVolumeHints(canvas: Canvas, z: Zone?) {
+        if (z?.hasVolumeControl != true) return
+
+        val r = radius - ringWidth / 2f
+        val chipRadius = ringWidth * 0.40f
+        for (degrees in intArrayOf(180, 0)) {
+            val radians = Math.toRadians(degrees.toDouble())
+            val x = (cx + r * Math.cos(radians)).toFloat()
+            val y = (cy + r * Math.sin(radians)).toFloat()
+
+            paint.style = Paint.Style.FILL
+            paint.color = Color.argb(210, 8, 12, 17)
+            canvas.drawCircle(x, y, chipRadius, paint)
+
+            paint.color = TEXT_PRIMARY
+            val arm = chipRadius * 0.52f
+            val thickness = chipRadius * 0.15f
+            canvas.drawRect(x - arm, y - thickness, x + arm, y + thickness, paint)
+            if (degrees == 0) {
+                canvas.drawRect(x - thickness, y - arm, x + thickness, y + arm, paint)
+            }
+        }
     }
 
     private fun displayedVolume(): Double? {

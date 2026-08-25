@@ -15,7 +15,7 @@ Docker, no Node host, no companion service.
 
 ## Install
 
-### [⬇ Download the APK](https://github.com/meltface-80/Display-extension-apk/raw/main/dist/dial-for-roon-0.3.0.apk)
+### [⬇ Download the APK](https://github.com/meltface-80/Display-extension-apk/raw/main/dist/dial-for-roon-0.4.0.apk)
 
 Android 8.0 (API 26) or newer. Sideload it, then once:
 
@@ -59,22 +59,38 @@ rotation, whether that range is in dB or arbitrary units.
 
 ## Widget
 
-A 4x2 home-screen control for the selected zone: artwork with the volume level
-as a ring, what's playing, transport and volume.
+The same dial, on the home screen. It is not a lookalike: the widget renders
+the app's own `DialView`, so a change to the dial changes both.
 
-A widget is `RemoteViews`, which means no custom views and no gestures — so the
-ring here reports the level rather than setting it, and the controls are
-buttons. One press of volume moves about a sixty-fourth of the output's range,
-which lands near 1 dB on a typical DAC; a single step would be right for the
-volume rocker but means 160 presses end to end on a 0.5 dB output.
+A widget is `RemoteViews`, which allows no custom views and no gestures, so the
+dial arrives as an image with tap targets over it:
+
+| Tap | Action |
+|---|---|
+| Left or right side of the ring (marked − and +) | Volume down / up |
+| The three controls at the bottom | Previous, play/pause, next |
+| Anywhere else | Opens the app |
+
+The targets are weighted thirds rather than measured positions, because a
+widget only ever approximately knows its own size — thirds land on the drawn
+controls at any size and give a finger something generous to hit.
+
+Two deliberate differences from the app. The ring reports the level rather than
+setting it, since there is no swipe to follow, which is why it gains the − and
++ marks. And the second-by-second progress arc is dropped: redrawing and
+re-sending the whole image every second is not what a widget is for.
+
+One press of volume moves about a sixty-fourth of the output's range, which
+lands near 1 dB on a typical DAC; a single step is right for the volume rocker
+but means 160 presses end to end on a 0.5 dB output.
 
 The press you make with the app long dead is the interesting case. It starts
 the process, and a second or two passes before the extension has registered and
 knows what the zones are, so the press is queued as an intent — "volume up",
 not a number of steps — and runs once there is a zone to run it against.
 Anything older than 20 seconds is dropped, because a press that fires after
-you've given up is worse than one that never fired. The widget keeps showing
-the last state it knew until then.
+you've given up is worse than one that never fired. Until then the widget shows
+the last dial it drew, kept on disk for exactly that.
 
 ## Voice control
 
@@ -185,12 +201,12 @@ Needs JDK 17+, Android SDK platform 36 and build-tools 36.0.0. Output lands in
   connects to the published session and drives it: pause, next, previous,
   volume up/down and mute all arrive at the Roon client as the right commands,
   and the session advertises exactly the commands the zone allows.
-- **The widget.** Its `RemoteViews` are inflated and drawn at a real 4x2 cell's
-  size — which is how the first layout was caught clipping the artist line and
-  crushing the volume readout to "-3...". Plus: a seek update does not count as
-  a change worth redrawing, the artwork stays well inside the 1 MB Binder
-  buffer every `RemoteViews` bitmap has to cross, and a queued press expires
-  rather than firing late.
+- **The widget.** The dial is rendered and decoded back: it comes out at the
+  right size, its corners stay transparent so the widget keeps its rounded
+  edges, every control has a tap target, and the image travels as compressed
+  data well under the 1 MB Binder buffer a `RemoteViews` bitmap would otherwise
+  have to cross whole. Plus: a seek update does not count as a change worth
+  redrawing, and a queued press expires rather than firing late.
 
 **Not yet verified against a live Roon Core** — there is no Core in the build
 environment. The protocol layer is checked against Roon's own code and the UI

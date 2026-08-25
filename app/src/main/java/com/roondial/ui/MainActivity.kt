@@ -23,6 +23,7 @@ import com.roondial.RoonApp
 import com.roondial.media.RoonPlaybackService
 import com.roondial.roon.RoonClient
 import com.roondial.roon.Zone
+import com.roondial.widget.RoonWidgetProvider
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.Executors
@@ -133,6 +134,9 @@ class MainActivity : Activity(), RoonClient.Listener, DialView.Callbacks {
         this.zones = zones
         dial.setZone(selected)
         loadArtwork(selected?.nowPlaying?.imageKey)
+        // Keep any placed widget in step while the app is in front, rather
+        // than leaving it on whatever the service last published.
+        RoonWidgetProvider.publish(this, selected)
     }
 
     // ----------------------------------------------------------- dial input
