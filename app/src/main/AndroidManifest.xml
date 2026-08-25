@@ -45,5 +45,22 @@
                 <action android:name="android.media.browse.MediaBrowserService" />
             </intent-filter>
         </service>
+
+        <receiver
+            android:name=".widget.RoonWidgetProvider"
+            android:exported="false"
+            android:label="@string/widget_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.roondial.widget.PLAY_PAUSE" />
+                <action android:name="com.roondial.widget.NEXT" />
+                <action android:name="com.roondial.widget.PREVIOUS" />
+                <action android:name="com.roondial.widget.VOLUME_UP" />
+                <action android:name="com.roondial.widget.VOLUME_DOWN" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/roon_widget_info" />
+        </receiver>
     </application>
 </manifest>

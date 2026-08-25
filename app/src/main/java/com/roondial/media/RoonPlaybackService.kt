@@ -8,6 +8,7 @@ import androidx.media3.session.MediaSessionService
 import com.roondial.RoonApp
 import com.roondial.roon.RoonClient
 import com.roondial.roon.Zone
+import com.roondial.widget.RoonWidgetProvider
 
 /**
  * Publishes the selected Roon zone as a media session.
@@ -52,6 +53,9 @@ class RoonPlaybackService : MediaSessionService(), RoonClient.Listener {
     override fun onTaskRemoved(rootIntent: Intent?) {
         // Swiping the app away while the zone is paused should let go; while
         // it is playing the session stays so the notification keeps working.
+        // A placed widget wants live state, so the connection outlives the
+        // task being swiped away; without one there is nothing left to serve.
+        if (RoonWidgetProvider.hasWidgets(this)) return
         val zone = client.selectedZone()
         if (zone == null || !zone.isPlaying) {
             stopSelf()
@@ -77,5 +81,6 @@ class RoonPlaybackService : MediaSessionService(), RoonClient.Listener {
 
     override fun onZones(zones: List<Zone>, selected: Zone?) {
         player?.updateZone(selected)
+        RoonWidgetProvider.publish(this, selected)
     }
 }

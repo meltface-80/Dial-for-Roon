@@ -9,11 +9,13 @@ Docker, no Node host, no companion service.
 |---|---|---|
 | ![now playing](docs/preview/now-playing.png) | ![adjusting](docs/preview/adjusting.png) | ![waiting](docs/preview/waiting.png) |
 
-*(Rendered from the real view code — see "Verification" below.)*
+![home screen widget](docs/preview/widget.png)
+
+*(All rendered from the real view code — see "Verification" below.)*
 
 ## Install
 
-### [⬇ Download the APK](https://github.com/meltface-80/Display-extension-apk/raw/main/dist/dial-for-roon-0.2.0.apk)
+### [⬇ Download the APK](https://github.com/meltface-80/Display-extension-apk/raw/main/dist/dial-for-roon-0.3.0.apk)
 
 Android 8.0 (API 26) or newer. Sideload it, then once:
 
@@ -54,6 +56,25 @@ looks like a broken download to anyone who doesn't know to hunt for the
 
 A full sweep of the ring covers the output's whole range in about 320° of
 rotation, whether that range is in dB or arbitrary units.
+
+## Widget
+
+A 4x2 home-screen control for the selected zone: artwork with the volume level
+as a ring, what's playing, transport and volume.
+
+A widget is `RemoteViews`, which means no custom views and no gestures — so the
+ring here reports the level rather than setting it, and the controls are
+buttons. One press of volume moves about a sixty-fourth of the output's range,
+which lands near 1 dB on a typical DAC; a single step would be right for the
+volume rocker but means 160 presses end to end on a 0.5 dB output.
+
+The press you make with the app long dead is the interesting case. It starts
+the process, and a second or two passes before the extension has registered and
+knows what the zones are, so the press is queued as an intent — "volume up",
+not a number of steps — and runs once there is a zone to run it against.
+Anything older than 20 seconds is dropped, because a press that fires after
+you've given up is worse than one that never fired. The widget keeps showing
+the last state it knew until then.
 
 ## Voice control
 
@@ -146,7 +167,7 @@ Needs JDK 17+, Android SDK platform 36 and build-tools 36.0.0. Output lands in
 
 ## Verification
 
-`./gradlew :app:testReleaseUnitTest` — 50 tests:
+`./gradlew :app:testReleaseUnitTest` — 65 tests:
 
 - **Wire format.** Frames produced by the Kotlin encoder are parsed back by
   `node-roon-api`'s own `moo.js`, and the SOOD query by the parser lifted from
@@ -164,6 +185,12 @@ Needs JDK 17+, Android SDK platform 36 and build-tools 36.0.0. Output lands in
   connects to the published session and drives it: pause, next, previous,
   volume up/down and mute all arrive at the Roon client as the right commands,
   and the session advertises exactly the commands the zone allows.
+- **The widget.** Its `RemoteViews` are inflated and drawn at a real 4x2 cell's
+  size — which is how the first layout was caught clipping the artist line and
+  crushing the volume readout to "-3...". Plus: a seek update does not count as
+  a change worth redrawing, the artwork stays well inside the 1 MB Binder
+  buffer every `RemoteViews` bitmap has to cross, and a queued press expires
+  rather than firing late.
 
 **Not yet verified against a live Roon Core** — there is no Core in the build
 environment. The protocol layer is checked against Roon's own code and the UI
