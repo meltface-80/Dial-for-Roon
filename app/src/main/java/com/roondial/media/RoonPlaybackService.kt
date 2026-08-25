@@ -1,5 +1,6 @@
 package com.roondial.media
 
+import android.content.Context
 import android.content.Intent
 import android.os.Looper
 import androidx.media3.common.util.UnstableApi
@@ -26,7 +27,39 @@ class RoonPlaybackService : MediaSessionService(), RoonClient.Listener {
 
     private var session: MediaSession? = null
     private var player: RoonPlayer? = null
+    private var audioFocus: AudioFocusHolder? = null
     private lateinit var client: RoonClient
+
+    companion object {
+        private const val PREFS = "roon_dial"
+        const val KEY_TAKE_AUDIO_FOCUS = "take_audio_focus"
+
+        /** Read by the in-app diagnostic; written only on the main thread. */
+        @Volatile
+        var isRunning: Boolean = false
+            private set
+
+        @Volatile
+        var sessionPublished: Boolean = false
+            private set
+
+        @Volatile
+        var holdsAudioFocus: Boolean = false
+            private set
+
+        @Volatile
+        var activePlayer: RoonPlayer? = null
+            private set
+
+        fun takesAudioFocus(context: Context): Boolean =
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getBoolean(KEY_TAKE_AUDIO_FOCUS, true)
+
+        fun setTakesAudioFocus(context: Context, enabled: Boolean) {
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                .putBoolean(KEY_TAKE_AUDIO_FOCUS, enabled).apply()
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -37,6 +70,11 @@ class RoonPlaybackService : MediaSessionService(), RoonClient.Listener {
         session = MediaSession.Builder(this, roonPlayer)
             .setId("roon-dial")
             .build()
+
+        audioFocus = AudioFocusHolder(this)
+        isRunning = true
+        sessionPublished = session != null
+        activePlayer = roonPlayer
 
         client.addListener(this)
         client.start()
@@ -63,6 +101,12 @@ class RoonPlaybackService : MediaSessionService(), RoonClient.Listener {
     }
 
     override fun onDestroy() {
+        isRunning = false
+        sessionPublished = false
+        activePlayer = null
+        holdsAudioFocus = false
+        audioFocus?.hold(false)
+        audioFocus = null
         client.removeListener(this)
         client.stop()
         session?.run {
@@ -82,5 +126,11 @@ class RoonPlaybackService : MediaSessionService(), RoonClient.Listener {
     override fun onZones(zones: List<Zone>, selected: Zone?) {
         player?.updateZone(selected)
         RoonWidgetProvider.publish(this, selected)
+
+        val playing = selected?.isPlaying == true
+        audioFocus?.let { focus ->
+            focus.hold(playing && takesAudioFocus(this))
+            holdsAudioFocus = focus.isHeld
+        }
     }
 }

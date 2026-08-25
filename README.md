@@ -15,7 +15,7 @@ Docker, no Node host, no companion service.
 
 ## Install
 
-### [⬇ Download the APK](https://github.com/meltface-80/Display-extension-apk/raw/main/dist/dial-for-roon-0.4.0.apk)
+### [⬇ Download the APK](https://github.com/meltface-80/Display-extension-apk/raw/main/dist/dial-for-roon-0.5.0.apk)
 
 Android 8.0 (API 26) or newer. Sideload it, then once:
 
@@ -108,6 +108,19 @@ those commands to the Roon zone.
 
 The same session drives the notification, the lock screen, headset and car
 buttons, and Wear.
+
+If a command is recognised but nothing happens, the app's long-press menu has
+**Voice control status**, which reports each link in the chain separately: the
+session, the zone, the commands it offers, the notification, and audio focus.
+Voice control fails silently by nature — the assistant hears the words, finds
+no session it wants, and says nothing useful — so the point is to place the
+failure rather than guess at it.
+
+The menu also has **audio focus**, on by default. Nothing plays on the phone, so
+without it this app has never taken focus, which makes it a weak candidate when
+the system decides which app "the media" refers to. Taking focus says the music
+being talked about is the music this app is in charge of. The cost is that it
+pauses audio in other apps on the phone, so it can be turned off.
 
 Two caveats worth knowing:
 
