@@ -21,6 +21,7 @@ import android.widget.TextView
 import android.widget.Toast
 import com.roondial.RoonApp
 import com.roondial.media.RoonPlaybackService
+import com.roondial.media.VoiceControlStatus
 import com.roondial.roon.RoonClient
 import com.roondial.roon.Zone
 import com.roondial.widget.RoonWidgetProvider
@@ -180,6 +181,12 @@ class MainActivity : Activity(), RoonClient.Listener, DialView.Callbacks {
             "Reconnect",
             "Find Core again",
             "Enter Core address…",
+            "Voice control status",
+            if (RoonPlaybackService.takesAudioFocus(this)) {
+                "Stop taking audio focus"
+            } else {
+                "Take audio focus"
+            },
             "About"
         )
         AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
@@ -190,7 +197,9 @@ class MainActivity : Activity(), RoonClient.Listener, DialView.Callbacks {
                     1 -> client.reconnect()
                     2 -> client.rediscover()
                     3 -> showManualAddress()
-                    4 -> showAbout()
+                    4 -> showVoiceControlStatus()
+                    5 -> toggleAudioFocus()
+                    6 -> showAbout()
                 }
             }
             .show()
@@ -216,6 +225,30 @@ class MainActivity : Activity(), RoonClient.Listener, DialView.Callbacks {
             }
             .setNegativeButton("Cancel", null)
             .show()
+    }
+
+    private fun showVoiceControlStatus() {
+        val report = VoiceControlStatus.report(this)
+        AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
+            .setTitle("Voice control")
+            .setMessage(report.asText())
+            .setPositiveButton("OK", null)
+            .show()
+    }
+
+    private fun toggleAudioFocus() {
+        val enabled = !RoonPlaybackService.takesAudioFocus(this)
+        RoonPlaybackService.setTakesAudioFocus(this, enabled)
+        Toast.makeText(
+            this,
+            if (enabled) {
+                "Taking audio focus while the zone plays. This pauses audio in other apps."
+            } else {
+                "No longer taking audio focus. Voice control may not find the session."
+            },
+            Toast.LENGTH_LONG
+        ).show()
+        // Applied on the next zone update, which is a second away while playing.
     }
 
     private fun showAbout() {
