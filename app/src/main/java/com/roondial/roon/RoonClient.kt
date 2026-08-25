@@ -47,6 +47,14 @@ class RoonClient(context: Context) : ZoneControl {
 
     enum class Stage { IDLE, DISCOVERING, CONNECTING, AWAITING_APPROVAL, CONNECTED, ERROR }
 
+    /**
+     * A control surface's intent, resolved against whatever the zone turns out
+     * to be. Widget presses are queued as these rather than as concrete
+     * requests, because when the press arrives there may be no zone yet — and
+     * "volume up" means a different number of steps on different outputs.
+     */
+    enum class Action { PLAY_PAUSE, NEXT, PREVIOUS, VOLUME_UP, VOLUME_DOWN, TOGGLE_MUTE }
+
     data class Status(val stage: Stage, val coreName: String? = null, val detail: String? = null)
 
     interface Listener {
@@ -71,6 +79,7 @@ class RoonClient(context: Context) : ZoneControl {
     private var requestId = 0
     private val pending = HashMap<String, (Moo.Message) -> Unit>()
 
+    private val pendingActions = PendingActions()
     private val zoneStore = ZoneStore()
     private var selectedZoneId: String? = prefs.getString(KEY_ZONE, null)
 
@@ -340,6 +349,9 @@ class RoonClient(context: Context) : ZoneControl {
         val sel = zoneStore.byId(selectedZoneId)
         selectedSnapshot = sel
         zonesSnapshot = all
+        if (sel != null && !pendingActions.isEmpty()) {
+            pendingActions.drain(System.currentTimeMillis()).forEach { execute(it) }
+        }
         main.post { listeners.forEach { it.onZones(all, sel) } }
     }
 
@@ -351,6 +363,46 @@ class RoonClient(context: Context) : ZoneControl {
             prefs.edit().putString(KEY_ZONE, zoneId).apply()
             publishZones()
         }
+    }
+
+    /**
+     * Runs [action] now if there is a zone, otherwise holds it until there is.
+     * Safe to call from any thread.
+     */
+    fun perform(action: Action) {
+        if (selectedZone() == null) {
+            pendingActions.add(action, System.currentTimeMillis())
+            start()
+            return
+        }
+        execute(action)
+    }
+
+    private fun execute(action: Action) {
+        val zone = selectedZone() ?: return
+        when (action) {
+            Action.PLAY_PAUSE -> control("playpause")
+            Action.NEXT -> control("next")
+            Action.PREVIOUS -> control("previous")
+            Action.VOLUME_UP -> changeVolumeSteps(nudgeSteps(zone))
+            Action.VOLUME_DOWN -> changeVolumeSteps(-nudgeSteps(zone))
+            Action.TOGGLE_MUTE -> toggleMute()
+        }
+    }
+
+    /**
+     * How far one press of a button moves the volume. A single step is right
+     * for the volume rocker but too fine for a button you have to aim at: on a
+     * 0.5 dB output that would be 160 presses end to end. A sixty-fourth of the
+     * range lands near 1 dB on a typical DAC.
+     */
+    private fun nudgeSteps(zone: Zone): Int {
+        val volume = zone.primaryVolume ?: return 1
+        if (volume.isIncremental) return 1
+        val span = volume.effectiveMax - volume.min
+        if (span <= 0.0 || volume.step <= 0.0) return 1
+        val total = (span / volume.step).toInt()
+        return (total / 64).coerceAtLeast(1)
     }
 
     // -------------------------------------------------------- transport verbs

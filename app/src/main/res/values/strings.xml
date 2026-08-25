@@ -1,4 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Dial for Roon</string>
+    <string name="widget_name">Roon zone</string>
+    <string name="widget_description">Now playing, transport and volume for a Roon zone.</string>
+    <string name="widget_artwork">Album artwork</string>
+    <string name="widget_play_pause">Play or pause</string>
+    <string name="widget_next">Next track</string>
+    <string name="widget_previous">Previous track</string>
+    <string name="widget_volume_up">Volume up</string>
+    <string name="widget_volume_down">Volume down</string>
 </resources>
