@@ -1,9 +1,13 @@
 package com.roondial.ui
 
+import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
 import android.graphics.Color
+import android.os.Build
 import android.os.Bundle
 import android.text.InputType
 import android.util.Log
@@ -15,6 +19,8 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import com.roondial.RoonApp
+import com.roondial.media.RoonPlaybackService
 import com.roondial.roon.RoonClient
 import com.roondial.roon.Zone
 import java.net.HttpURLConnection
@@ -26,6 +32,7 @@ class MainActivity : Activity(), RoonClient.Listener, DialView.Callbacks {
     companion object {
         private const val TAG = "RoonDial"
         private const val DEFAULT_PORT = 9330
+        private const val REQUEST_NOTIFICATIONS = 1
     }
 
     private lateinit var dial: DialView
@@ -67,19 +74,36 @@ class MainActivity : Activity(), RoonClient.Listener, DialView.Callbacks {
         }
         setContentView(root)
 
-        client = RoonClient(this)
+        // Shared with the media session service, which owns the connection's
+        // lifetime so voice control survives leaving the app.
+        client = (application as RoonApp).roon
+        requestNotificationPermission()
     }
 
     override fun onStart() {
         super.onStart()
-        client.listener = this
+        client.addListener(this)
         client.start()
+        startService(Intent(this, RoonPlaybackService::class.java))
     }
 
     override fun onStop() {
         super.onStop()
-        client.listener = null
-        client.stop()
+        client.removeListener(this)
+        // The connection deliberately stays up: it belongs to the service now.
+    }
+
+    /**
+     * Without this the media notification never appears, and with it goes the
+     * lock-screen control and part of the voice-control surface.
+     */
+    private fun requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        val granted = checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS)
+        }
     }
 
     override fun onDestroy() {
@@ -159,7 +183,7 @@ class MainActivity : Activity(), RoonClient.Listener, DialView.Callbacks {
             .setItems(options) { _, which ->
                 when (which) {
                     0 -> showZonePicker()
-                    1 -> { client.stop(); client.start() }
+                    1 -> client.reconnect()
                     2 -> client.rediscover()
                     3 -> showManualAddress()
                     4 -> showAbout()
