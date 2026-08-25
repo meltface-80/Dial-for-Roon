@@ -13,18 +13,34 @@ Docker, no Node host, no companion service.
 
 ## Install
 
-Download this - https://github.com/meltface-80/Display-extension-apk/blob/main/dist/dial-for-roon-0.2.0.apk
+### [⬇ Download the APK](https://github.com/meltface-80/Display-extension-apk/raw/main/dist/dial-for-roon-0.2.0.apk)
 
-Sideload `dial-for-roon-<version>.apk` (Android 8.0 / API 26 or newer). It is
-signed with the standard Android debug key, so it installs alongside anything
-else but will not update in place from a differently-signed build.
-
-Then, once:
+Android 8.0 (API 26) or newer. Sideload it, then once:
 
 1. Open the app on the same Wi-Fi as your Roon Core.
 2. In Roon: **Settings → Extensions → Enable "Dial for Roon"**.
 
 The pairing token is stored per Core, so approval only happens the first time.
+
+That link is the `/raw/` one deliberately. The file's ordinary page on GitHub
+(a `/blob/` URL) serves a 225 KB web page rather than the 3.6 MB app, so it
+looks like a broken download to anyone who doesn't know to hunt for the
+*Download raw file* button.
+
+### If Android gets in the way
+
+- **"This type of file can harm your device."** Chrome says that about every
+  APK, not this one in particular. Choose to keep the file.
+- **Nothing happens when you open it.** The installer needs *Install unknown
+  apps* permission for whichever app you downloaded with — usually Chrome or
+  your file manager.
+- **Play Protect says the app wasn't scanned, or looks unsafe.** It is signed
+  with the standard Android debug key, which is what any unpublished build
+  gets. That is what Play Protect is reacting to; install anyway if you're
+  happy to.
+- **"App not installed."** An older copy signed with a different key is
+  probably still on the device. Uninstall that first — signatures have to
+  match to upgrade in place.
 
 ## Use
 
