@@ -15,7 +15,7 @@ Docker, no Node host, no companion service.
 
 ## Install
 
-### [⬇ Download the APK](https://github.com/meltface-80/Display-extension-apk/raw/main/dist/dial-for-roon-0.5.0.apk)
+### [⬇ Download the APK](https://github.com/meltface-80/Display-extension-apk/raw/main/dist/dial-for-roon-0.6.0.apk)
 
 Android 8.0 (API 26) or newer. Sideload it, then once:
 
@@ -67,18 +67,22 @@ dial arrives as an image with tap targets over it:
 
 | Tap | Action |
 |---|---|
-| Left or right side of the ring (marked − and +) | Volume down / up |
+| The − and + buttons on the ring | Volume down / up |
 | The three controls at the bottom | Previous, play/pause, next |
 | Anywhere else | Opens the app |
+
+The ring cannot be swept here. A drag on the home screen belongs to the
+launcher — reaching for a rotary gesture gets you the notification shade — so
+volume is two buttons, drawn the size of the transport controls because that is
+what they are: the only way to change volume from the widget, not a hint about
+one.
 
 The targets are weighted thirds rather than measured positions, because a
 widget only ever approximately knows its own size — thirds land on the drawn
 controls at any size and give a finger something generous to hit.
 
-Two deliberate differences from the app. The ring reports the level rather than
-setting it, since there is no swipe to follow, which is why it gains the − and
-+ marks. And the second-by-second progress arc is dropped: redrawing and
-re-sending the whole image every second is not what a widget is for.
+The second-by-second progress arc is dropped too: redrawing and re-sending the
+whole image every second is not what a widget is for.
 
 One press of volume moves about a sixty-fourth of the output's range, which
 lands near 1 dB on a typical DAC; a single step is right for the volume rocker
