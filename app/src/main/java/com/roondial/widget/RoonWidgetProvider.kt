@@ -46,10 +46,25 @@ class RoonWidgetProvider : AppWidgetProvider() {
         /** Time to wait for the zone's echo before releasing the broadcast. */
         private const val ECHO_GRACE_MS = 1_200L
 
+        /**
+         * Drawing the dial means laying out a view and compressing a 512px
+         * image, so a volume sweep in the app — which changes the ring on
+         * every frame — must not turn into a render per frame out here.
+         */
+        private const val MIN_RENDER_INTERVAL_MS = 500L
+
         private val artLoader = Executors.newSingleThreadExecutor()
 
         @Volatile
+        private var lastRenderAt = 0L
+        private var trailingRender: Runnable? = null
+
+        @Volatile
         private var lastPublished: WidgetSnapshot? = null
+
+        /** Kept so artwork arriving late, or a resize, can redraw the dial. */
+        @Volatile
+        private var lastZone: Zone? = null
 
         fun actionFor(intentAction: String?): RoonClient.Action? = when (intentAction) {
             ACTION_PLAY_PAUSE -> RoonClient.Action.PLAY_PAUSE
@@ -77,20 +92,55 @@ class RoonWidgetProvider : AppWidgetProvider() {
          */
         fun publish(context: Context, zone: Zone?) {
             val snapshot = WidgetSnapshot.of(zone)
+            lastZone = zone
             if (snapshot == lastPublished) return
             lastPublished = snapshot
             snapshot.save(context)
-            render(context, snapshot)
+
+            val main = Handler(Looper.getMainLooper())
+            trailingRender?.let { main.removeCallbacks(it) }
+
+            val now = android.os.SystemClock.uptimeMillis()
+            val since = now - lastRenderAt
+            if (since >= MIN_RENDER_INTERVAL_MS) {
+                lastRenderAt = now
+                render(context, zone, snapshot)
+                return
+            }
+            // Mid-sweep: let it settle, then draw where it landed.
+            val trailing = Runnable {
+                lastRenderAt = android.os.SystemClock.uptimeMillis()
+                val latest = lastZone
+                render(context, latest, WidgetSnapshot.of(latest))
+            }
+            trailingRender = trailing
+            main.postDelayed(trailing, MIN_RENDER_INTERVAL_MS - since)
         }
 
-        fun render(context: Context, snapshot: WidgetSnapshot = WidgetSnapshot.load(context)) {
+        fun render(
+            context: Context,
+            zone: Zone?,
+            snapshot: WidgetSnapshot = WidgetSnapshot.load(context)
+        ) {
             val ids = widgetIds(context)
             if (ids.isEmpty()) return
-            val manager = AppWidgetManager.getInstance(context)
-            val views = buildViews(context, snapshot)
-            manager.updateAppWidget(ids, views)
+            val cover = WidgetArtwork.cached(context, snapshot.imageKey)
+            val dial = WidgetDial.render(context, zone, statusFor(snapshot), cover)
+            if (dial != null) WidgetDial.cache(context, dial)
+            AppWidgetManager.getInstance(context)
+                .updateAppWidget(ids, buildViews(context, dial))
             ensureArtwork(context, snapshot)
         }
+
+        private fun statusFor(snapshot: WidgetSnapshot): String =
+            if (snapshot.hasZone) "" else "Open Dial for Roon to connect"
+
+        /**
+         * The dial with whatever art and state was last drawn — for a widget
+         * whose process has since been killed, where re-rendering would mean
+         * showing an empty dial until the extension reconnects.
+         */
+        private fun lastRendered(context: Context): ByteArray? = WidgetDial.cached(context)
 
         /** Fetches cover art off the main thread, then redraws once it lands. */
         private fun ensureArtwork(context: Context, snapshot: WidgetSnapshot) {
@@ -100,52 +150,33 @@ class RoonWidgetProvider : AppWidgetProvider() {
             val app = context.applicationContext as? RoonApp ?: return
             val url = app.roon.imageUrl(key, WidgetArtwork.SIZE) ?: return
             artLoader.execute {
-                if (WidgetArtwork.fetch(context, url, key) != null) {
-                    Handler(Looper.getMainLooper()).post {
-                        val ids = widgetIds(context)
-                        if (ids.isEmpty()) return@post
-                        AppWidgetManager.getInstance(context)
-                            .updateAppWidget(ids, buildViews(context, snapshot))
-                    }
+                val cover = WidgetArtwork.fetch(context, url, key) ?: return@execute
+                Handler(Looper.getMainLooper()).post {
+                    val ids = widgetIds(context)
+                    if (ids.isEmpty()) return@post
+                    val dial = WidgetDial.render(
+                        context, lastZone, statusFor(snapshot), cover
+                    ) ?: return@post
+                    WidgetDial.cache(context, dial)
+                    AppWidgetManager.getInstance(context)
+                        .updateAppWidget(ids, buildViews(context, dial))
                 }
             }
         }
 
-        fun buildViews(context: Context, snapshot: WidgetSnapshot): RemoteViews {
+        fun buildViews(context: Context, dial: ByteArray?): RemoteViews {
             val views = RemoteViews(context.packageName, R.layout.widget_dial)
 
-            views.setTextViewText(
-                R.id.widget_zone,
-                if (snapshot.hasZone) snapshot.zoneName else "Dial for Roon"
-            )
-            views.setTextViewText(
-                R.id.widget_title,
-                when {
-                    !snapshot.hasZone -> "Not connected"
-                    snapshot.title.isNotEmpty() -> snapshot.title
-                    else -> "Nothing playing"
-                }
-            )
-            views.setTextViewText(R.id.widget_artist, snapshot.artist)
-            views.setTextViewText(R.id.widget_volume, snapshot.volumeLabel)
-            views.setImageViewResource(
-                R.id.widget_play_pause,
-                if (snapshot.isPlaying) R.drawable.ic_widget_pause else R.drawable.ic_widget_play
-            )
-            views.setImageViewBitmap(
-                R.id.widget_art,
-                WidgetArtwork.render(
-                    WidgetArtwork.cached(context, snapshot.imageKey),
-                    snapshot.volumeFraction
-                )
-            )
+            val image = dial ?: lastRendered(context)
+            if (image != null) views.setImageViewIcon(R.id.widget_dial, WidgetDial.icon(image))
 
             views.setOnClickPendingIntent(R.id.widget_play_pause, broadcast(context, ACTION_PLAY_PAUSE))
             views.setOnClickPendingIntent(R.id.widget_next, broadcast(context, ACTION_NEXT))
             views.setOnClickPendingIntent(R.id.widget_previous, broadcast(context, ACTION_PREVIOUS))
             views.setOnClickPendingIntent(R.id.widget_volume_up, broadcast(context, ACTION_VOLUME_UP))
             views.setOnClickPendingIntent(R.id.widget_volume_down, broadcast(context, ACTION_VOLUME_DOWN))
-            views.setOnClickPendingIntent(R.id.widget_art, openApp(context))
+            views.setOnClickPendingIntent(R.id.widget_open, openApp(context))
+            views.setOnClickPendingIntent(R.id.widget_open_centre, openApp(context))
 
             return views
         }
@@ -176,7 +207,18 @@ class RoonWidgetProvider : AppWidgetProvider() {
         appWidgetIds: IntArray
     ) {
         val snapshot = lastPublished ?: WidgetSnapshot.load(context)
-        appWidgetManager.updateAppWidget(appWidgetIds, buildViews(context, snapshot))
+        val zone = lastZone
+        val dial = if (zone != null) {
+            WidgetDial.render(
+                context, zone, statusFor(snapshot),
+                WidgetArtwork.cached(context, snapshot.imageKey)
+            )?.also { WidgetDial.cache(context, it) }
+        } else {
+            // Nothing live to draw yet; the last picture beats an empty dial.
+            lastRendered(context)
+                ?: WidgetDial.render(context, null, statusFor(snapshot), null)
+        }
+        appWidgetManager.updateAppWidget(appWidgetIds, buildViews(context, dial))
         ensureArtwork(context, snapshot)
     }
 
@@ -236,5 +278,6 @@ class RoonWidgetProvider : AppWidgetProvider() {
     override fun onDisabled(context: Context) {
         WidgetArtwork.clearMemoryCache()
         lastPublished = null
+        lastZone = null
     }
 }

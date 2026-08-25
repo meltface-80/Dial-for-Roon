@@ -3,95 +3,25 @@ package com.roondial.widget
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.graphics.BitmapShader
-import android.graphics.Canvas
-import android.graphics.Matrix
-import android.graphics.Paint
-import android.graphics.RectF
-import android.graphics.Shader
 import android.util.Log
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
-import kotlin.math.min
 
 /**
- * The widget's artwork: a circular cover with the volume level as a ring
- * around it, echoing the dial without pretending to be one — a widget only
- * receives clicks, so the ring here reads a level rather than setting it.
- *
- * Every bitmap handed to RemoteViews crosses the 1 MB Binder buffer shared by
- * the whole process, so this renders small on purpose. 192px square in
- * ARGB_8888 is 144 KB, with plenty of headroom.
+ * Cover art for the widget's dial: fetched from the Core, scaled down, and kept
+ * in memory and on disk so a widget whose process has died still has something
+ * to draw.
  */
 object WidgetArtwork {
 
     private const val TAG = "WidgetArtwork"
-    const val SIZE = 192
-
-    private const val RING_TRACK = 0xFF232B34.toInt()
-    private const val RING_FILL = 0xFF7AC8FF.toInt()
-    private const val PLACEHOLDER = 0xFF141A21.toInt()
+    const val SIZE = 384
 
     private const val CACHE_FILE = "widget-art.jpg"
 
     private var cachedKey: String? = null
     private var cachedCover: Bitmap? = null
-
-    /**
-     * Draws the cover, or a placeholder, with [volumeFraction] of a ring around
-     * it. A negative fraction means the zone has no volume control to show.
-     */
-    fun render(cover: Bitmap?, volumeFraction: Float): Bitmap {
-        val bitmap = Bitmap.createBitmap(SIZE, SIZE, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bitmap)
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-
-        val ringWidth = SIZE * 0.09f
-        val centre = SIZE / 2f
-        val ringRadius = centre - ringWidth / 2f
-        val coverRadius = centre - ringWidth - SIZE * 0.02f
-
-        if (cover != null && !cover.isRecycled) {
-            val shader = BitmapShader(cover, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
-            val scale = maxOf(
-                2f * coverRadius / cover.width,
-                2f * coverRadius / cover.height
-            )
-            shader.setLocalMatrix(
-                Matrix().apply {
-                    setScale(scale, scale)
-                    postTranslate(
-                        centre - cover.width * scale / 2f,
-                        centre - cover.height * scale / 2f
-                    )
-                }
-            )
-            paint.shader = shader
-            canvas.drawCircle(centre, centre, coverRadius, paint)
-            paint.shader = null
-        } else {
-            paint.color = PLACEHOLDER
-            canvas.drawCircle(centre, centre, coverRadius, paint)
-        }
-
-        if (volumeFraction >= 0f) {
-            paint.style = Paint.Style.STROKE
-            paint.strokeWidth = ringWidth
-            paint.strokeCap = Paint.Cap.ROUND
-            paint.color = RING_TRACK
-            canvas.drawCircle(centre, centre, ringRadius, paint)
-
-            paint.color = RING_FILL
-            val rect = RectF(
-                centre - ringRadius, centre - ringRadius,
-                centre + ringRadius, centre + ringRadius
-            )
-            canvas.drawArc(rect, -90f, 360f * volumeFraction.coerceIn(0f, 1f), false, paint)
-        }
-
-        return bitmap
-    }
 
     /**
      * Cover art for [imageKey], from memory, then disk, then the Core. Returns

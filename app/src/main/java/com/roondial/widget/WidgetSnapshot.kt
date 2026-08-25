@@ -15,7 +15,9 @@ data class WidgetSnapshot(
     val zoneName: String = "",
     val title: String = "",
     val artist: String = "",
+    val album: String = "",
     val isPlaying: Boolean = false,
+    val isMuted: Boolean = false,
     val volumeLabel: String = "",
     val volumeFraction: Float = -1f,
     val imageKey: String = "",
@@ -33,7 +35,9 @@ data class WidgetSnapshot(
                 zoneName = zone.displayName,
                 title = zone.nowPlaying?.line1.orEmpty(),
                 artist = zone.nowPlaying?.line2.orEmpty(),
+                album = zone.nowPlaying?.line3.orEmpty(),
                 isPlaying = zone.isPlaying,
+                isMuted = volume?.isMuted ?: false,
                 volumeLabel = when {
                     volume == null -> ""
                     volume.isMuted -> "muted"
@@ -52,7 +56,9 @@ data class WidgetSnapshot(
                 zoneName = prefs.getString("zone_name", "").orEmpty(),
                 title = prefs.getString("title", "").orEmpty(),
                 artist = prefs.getString("artist", "").orEmpty(),
+                album = prefs.getString("album", "").orEmpty(),
                 isPlaying = prefs.getBoolean("is_playing", false),
+                isMuted = prefs.getBoolean("is_muted", false),
                 volumeLabel = prefs.getString("volume_label", "").orEmpty(),
                 volumeFraction = prefs.getFloat("volume_fraction", -1f),
                 imageKey = prefs.getString("image_key", "").orEmpty(),
@@ -66,7 +72,9 @@ data class WidgetSnapshot(
             .putString("zone_name", zoneName)
             .putString("title", title)
             .putString("artist", artist)
+            .putString("album", album)
             .putBoolean("is_playing", isPlaying)
+            .putBoolean("is_muted", isMuted)
             .putString("volume_label", volumeLabel)
             .putFloat("volume_fraction", volumeFraction)
             .putString("image_key", imageKey)

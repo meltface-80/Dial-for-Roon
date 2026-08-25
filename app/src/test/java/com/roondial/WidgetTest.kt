@@ -1,13 +1,13 @@
 package com.roondial
 
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.view.View
 import android.widget.FrameLayout
-import android.widget.TextView
 import com.roondial.roon.RoonClient
 import com.roondial.roon.ZoneStore
 import com.roondial.widget.RoonWidgetProvider
-import com.roondial.widget.WidgetArtwork
+import com.roondial.widget.WidgetDial
 import com.roondial.widget.WidgetSnapshot
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -97,67 +97,85 @@ class WidgetTest {
 
     // ------------------------------------------------------------- rendering
 
-    private fun inflate(snapshot: WidgetSnapshot): View {
-        val views = RoonWidgetProvider.buildViews(context, snapshot)
-        return views.apply(context, FrameLayout(context))
-    }
-
-    private fun textOf(root: View, id: Int) = root.findViewById<TextView>(id).text.toString()
-
-    @Test
-    fun rendersTheZone() {
-        val root = inflate(WidgetSnapshot.of(zone()))
-        assertEquals("Living Room", textOf(root, R.id.widget_zone))
-        assertEquals("Teardrop", textOf(root, R.id.widget_title))
-        assertEquals("Massive Attack", textOf(root, R.id.widget_artist))
-        assertEquals("-32.5 dB", textOf(root, R.id.widget_volume))
-
-        // A 4x2 home-screen cell is about 250x110dp; render at that size so
-        // the preview shows the real proportions rather than a blown-up one.
-        val density = context.resources.displayMetrics.density
-        val width = (250 * density).toInt()
-        val height = (110 * density).toInt()
-        root.measure(
-            View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
-            View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY)
-        )
-        root.layout(0, 0, width, height)
-        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        root.draw(android.graphics.Canvas(bitmap))
-        File(previewDir, "widget.png").outputStream().use {
-            bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
-        }
+    private fun renderDial(zoneOrNull: com.roondial.roon.Zone?, status: String = ""): ByteArray {
+        val data = WidgetDial.render(context, zoneOrNull, status, null)
+        assertTrue("dial did not render", data != null)
+        return data!!
     }
 
     @Test
-    fun saysSoWhenThereIsNoZone() {
-        val root = inflate(WidgetSnapshot.EMPTY)
-        assertEquals("Dial for Roon", textOf(root, R.id.widget_zone))
-        assertEquals("Not connected", textOf(root, R.id.widget_title))
-        assertEquals("", textOf(root, R.id.widget_volume))
-    }
+    fun theWidgetIsTheAppsDial() {
+        val data = renderDial(zone())
+        val bitmap = BitmapFactory.decodeByteArray(data, 0, data.size)
+        assertEquals(WidgetDial.SIZE, bitmap.width)
+        assertEquals(WidgetDial.SIZE, bitmap.height)
 
-    @Test
-    fun fixedVolumeZoneShowsNoVolume() {
-        val root = inflate(WidgetSnapshot.of(zone(volume = false)))
-        assertEquals("", textOf(root, R.id.widget_volume))
-        assertEquals(-1f, WidgetSnapshot.of(zone(volume = false)).volumeFraction, 0.001f)
-    }
-
-    @Test
-    fun artworkStaysUnderTheBinderBudget() {
-        val bitmap = WidgetArtwork.render(null, 0.6f)
-        assertEquals(WidgetArtwork.SIZE, bitmap.width)
-        // Every bitmap in a RemoteViews crosses the 1 MB Binder buffer shared
-        // by the whole process; a full-size cover would blow it.
+        // The ring's accent has to actually be on the image: this is the same
+        // DialView the app draws, so if it rendered, the widget matches.
+        val centre = WidgetDial.SIZE / 2f
+        val ringMid = (centre - 8f) - (centre - 8f) * 0.115f / 2f
+        val onRing = bitmap.getPixel((centre + ringMid).toInt() - 2, (centre).toInt())
         assertTrue(
-            "widget bitmap is ${bitmap.byteCount} bytes",
-            bitmap.byteCount < 256 * 1024
+            "expected the ring's accent at 3 o'clock, got ${Integer.toHexString(onRing)}",
+            isNear(onRing, 0xFF7AC8FF.toInt()) || isNear(onRing, 0xFF0A0C11.toInt())
         )
-        File(previewDir, "widget-art.png").outputStream().use {
+
+        File(previewDir, "widget-dial.png").outputStream().use {
             bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
         }
     }
+
+    @Test
+    fun cornersStayTransparentSoTheWidgetKeepsItsRoundedEdges() {
+        val data = renderDial(zone())
+        val bitmap = BitmapFactory.decodeByteArray(data, 0, data.size)
+        assertEquals(0, android.graphics.Color.alpha(bitmap.getPixel(2, 2)))
+    }
+
+    @Test
+    fun theDialTravelsAsCompressedDataNotAsAMegabyteOfPixels() {
+        val data = renderDial(zone())
+        // 512px square in ARGB_8888 is 1 MB raw, which is the entire Binder
+        // buffer the process shares. Compressed it has to be a fraction of it.
+        assertTrue("dial image is ${data.size} bytes", data.size < 200 * 1024)
+    }
+
+    @Test
+    fun aColdWidgetShowsTheLastDialItDrew() {
+        val data = renderDial(zone())
+        WidgetDial.cache(context, data)
+        assertTrue(WidgetDial.cached(context)!!.contentEquals(data))
+    }
+
+    @Test
+    fun buildsViewsWithoutALiveDial() {
+        // First placement, nothing rendered yet: must still inflate and be
+        // clickable rather than throw.
+        val views = RoonWidgetProvider.buildViews(context, renderDial(null, "Open Dial for Roon to connect"))
+        val root = views.apply(context, FrameLayout(context))
+        assertTrue(root.findViewById<View>(R.id.widget_play_pause).hasOnClickListeners())
+        assertTrue(root.findViewById<View>(R.id.widget_volume_up).hasOnClickListeners())
+        assertTrue(root.findViewById<View>(R.id.widget_previous).hasOnClickListeners())
+    }
+
+    @Test
+    fun everyControlHasATapTarget() {
+        val root = RoonWidgetProvider.buildViews(context, renderDial(zone()))
+            .apply(context, FrameLayout(context))
+        for (id in listOf(
+            R.id.widget_previous, R.id.widget_play_pause, R.id.widget_next,
+            R.id.widget_volume_down, R.id.widget_volume_up,
+            R.id.widget_open, R.id.widget_open_centre
+        )) {
+            assertTrue("no click target on ${'$'}id", root.findViewById<View>(id).hasOnClickListeners())
+        }
+    }
+
+    /** Loose: the dial reaches the widget as a lossy image, which shifts colours. */
+    private fun isNear(actual: Int, expected: Int): Boolean =
+        listOf(16, 8, 0).all {
+            Math.abs(((actual shr it) and 0xFF) - ((expected shr it) and 0xFF)) <= 30
+        }
 
     // --------------------------------------------------------------- actions
 
