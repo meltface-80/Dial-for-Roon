@@ -186,30 +186,43 @@ class DialView @JvmOverloads constructor(
         drawArtwork(canvas)
         drawText(canvas, z)
         drawTransport(canvas, z)
-        if (widgetMode) drawVolumeHints(canvas, z)
+        if (widgetMode) drawVolumeButtons(canvas, z)
     }
 
     /**
-     * On the widget the ring cannot be swept, so the two halves of it are tap
-     * targets instead. These mark them.
+     * The widget's volume control.
+     *
+     * On the home screen the ring cannot be swept — a drag there belongs to the
+     * launcher, and reaching for one gets you the notification shade instead —
+     * so volume is two buttons. They are drawn the size of the transport
+     * controls, because that is what they are: the only way to change volume
+     * from the widget, not a hint about one.
      */
-    private fun drawVolumeHints(canvas: Canvas, z: Zone?) {
+    private fun drawVolumeButtons(canvas: Canvas, z: Zone?) {
         if (z?.hasVolumeControl != true) return
 
         val r = radius - ringWidth / 2f
-        val chipRadius = ringWidth * 0.40f
+        val buttonRadius = innerRadius * 0.17f
+        val border = dp(2f)
+
         for (degrees in intArrayOf(180, 0)) {
             val radians = Math.toRadians(degrees.toDouble())
             val x = (cx + r * Math.cos(radians)).toFloat()
             val y = (cy + r * Math.sin(radians)).toFloat()
 
             paint.style = Paint.Style.FILL
-            paint.color = Color.argb(210, 8, 12, 17)
-            canvas.drawCircle(x, y, chipRadius, paint)
+            paint.color = 0xF20E141C.toInt()
+            canvas.drawCircle(x, y, buttonRadius, paint)
 
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = border
+            paint.color = if (z.primaryVolume?.isMuted == true) RING_MUTED else RING_FILL
+            canvas.drawCircle(x, y, buttonRadius - border / 2f, paint)
+
+            paint.style = Paint.Style.FILL
             paint.color = TEXT_PRIMARY
-            val arm = chipRadius * 0.52f
-            val thickness = chipRadius * 0.15f
+            val arm = buttonRadius * 0.44f
+            val thickness = buttonRadius * 0.125f
             canvas.drawRect(x - arm, y - thickness, x + arm, y + thickness, paint)
             if (degrees == 0) {
                 canvas.drawRect(x - thickness, y - arm, x + thickness, y + arm, paint)

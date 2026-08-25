@@ -97,6 +97,13 @@ class WidgetTest {
 
     // ------------------------------------------------------------- rendering
 
+    /** DialView's geometry, at the density the test renders under. */
+    private val density get() = context.resources.displayMetrics.density
+    private val dialRadius get() = WidgetDial.SIZE / 2f - 8f * density
+    private val ringWidth get() = dialRadius * 0.115f
+    private val ringMid get() = dialRadius - ringWidth / 2f
+    private val dialInnerRadius get() = dialRadius - ringWidth - 10f * density
+
     private fun renderDial(zoneOrNull: com.roondial.roon.Zone?, status: String = ""): ByteArray {
         val data = WidgetDial.render(context, zoneOrNull, status, null)
         assertTrue("dial did not render", data != null)
@@ -112,17 +119,59 @@ class WidgetTest {
 
         // The ring's accent has to actually be on the image: this is the same
         // DialView the app draws, so if it rendered, the widget matches.
+        // Sampled off the horizontal axis, because 3 and 9 o'clock are where
+        // the volume buttons sit.
         val centre = WidgetDial.SIZE / 2f
-        val ringMid = (centre - 8f) - (centre - 8f) * 0.115f / 2f
-        val onRing = bitmap.getPixel((centre + ringMid).toInt() - 2, (centre).toInt())
+        val diagonal = ringMid * 0.7071f
+        val onRing = bitmap.getPixel(
+            (centre + diagonal).toInt(),
+            (centre - diagonal).toInt()
+        )
         assertTrue(
-            "expected the ring's accent at 3 o'clock, got ${Integer.toHexString(onRing)}",
-            isNear(onRing, 0xFF7AC8FF.toInt()) || isNear(onRing, 0xFF0A0C11.toInt())
+            "expected the ring's accent, got ${Integer.toHexString(onRing)}",
+            isNear(onRing, 0xFF7AC8FF.toInt())
         )
 
         File(previewDir, "widget-dial.png").outputStream().use {
             bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
         }
+    }
+
+    @Test
+    fun volumeIsTwoRealButtonsNotAHint() {
+        // On the home screen the ring cannot be swept — a drag there belongs to
+        // the launcher — so these buttons are the only way to change volume and
+        // have to look like it. They sit at 9 and 3 o'clock, the size of the
+        // transport controls.
+        val data = renderDial(zone())
+        val bitmap = BitmapFactory.decodeByteArray(data, 0, data.size)
+        val centre = WidgetDial.SIZE / 2
+        val offset = ringMid.toInt()
+
+        val buttonRadius = (dialInnerRadius * 0.17f).toInt()
+
+        for (x in listOf(centre - offset, centre + offset)) {
+            // Dead centre is the - or + mark itself.
+            assertTrue(
+                "no mark at $x, got ${Integer.toHexString(bitmap.getPixel(x, centre))}",
+                isNear(bitmap.getPixel(x, centre), 0xFFF2F5F8.toInt())
+            )
+            // Just off centre is the button's own dark face, which is what
+            // makes it read as a control rather than as decoration on the ring.
+            val face = bitmap.getPixel(x, centre - (buttonRadius * 0.55f).toInt())
+            assertTrue(
+                "no button face at $x, got ${Integer.toHexString(face)}",
+                isNear(face, 0xFF0E141C.toInt())
+            )
+        }
+
+        // As big as the transport controls: same radius, so the accent border
+        // lands near the edge rather than close in.
+        val border = bitmap.getPixel(centre + offset, centre - buttonRadius + 2)
+        assertTrue(
+            "expected the button's border, got ${Integer.toHexString(border)}",
+            isNear(border, 0xFF7AC8FF.toInt())
+        )
     }
 
     @Test

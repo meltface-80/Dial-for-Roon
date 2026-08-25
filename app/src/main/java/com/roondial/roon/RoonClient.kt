@@ -43,6 +43,17 @@ class RoonClient(context: Context) : ZoneControl {
         const val SERVICE_IMAGE = "com.roonlabs.image:1"
         const val SERVICE_PING = "com.roonlabs.ping:1"
         const val SERVICE_REGISTRY = "com.roonlabs.registry:1"
+
+        /**
+         * Which transport control a play/pause press should send.
+         *
+         * Deliberately not Roon's own `playpause` toggle. A zone left paused
+         * drifts to stopped rather than staying paused, and a toggle does
+         * nothing useful from there — which is why pressing play would leave
+         * the music off while skipping a track started it again. `play`
+         * resumes from either state.
+         */
+        fun playPauseControl(zone: Zone): String = if (zone.isPlaying) "pause" else "play"
     }
 
     enum class Stage { IDLE, DISCOVERING, CONNECTING, AWAITING_APPROVAL, CONNECTED, ERROR }
@@ -85,6 +96,9 @@ class RoonClient(context: Context) : ZoneControl {
 
     /** Read by the UI thread; only ever written on the network thread. */
     @Volatile private var selectedSnapshot: Zone? = null
+
+    /** True only while registered with a Core and holding a live socket. */
+    @Volatile private var connected: Boolean = false
     @Volatile private var zonesSnapshot: List<Zone> = emptyList()
 
     private var coreId: String? = null
@@ -136,8 +150,21 @@ class RoonClient(context: Context) : ZoneControl {
             socket?.close(1000, "stopping")
             socket = null
             pending.clear()
+            // The close callback bails out once `socket` is null, so it will
+            // not do this for us. Leaving a zone behind here is what made a
+            // widget press look like it worked and then do nothing: the zone
+            // was still there to act on, but the socket to act through was not.
+            markDisconnected()
         }
         releaseMulticastLock()
+    }
+
+    private fun markDisconnected() {
+        connected = false
+        zoneStore.clear()
+        selectedSnapshot = null
+        zonesSnapshot = emptyList()
+        main.post { listeners.forEach { it.onZones(emptyList(), null) } }
     }
 
     /** Drop the current socket and connect again to the same Core. */
@@ -347,6 +374,7 @@ class RoonClient(context: Context) : ZoneControl {
             selectedZoneId?.let { prefs.edit().putString(KEY_ZONE, it).apply() }
         }
         val sel = zoneStore.byId(selectedZoneId)
+        connected = socket != null
         selectedSnapshot = sel
         zonesSnapshot = all
         if (sel != null && !pendingActions.isEmpty()) {
@@ -370,7 +398,7 @@ class RoonClient(context: Context) : ZoneControl {
      * Safe to call from any thread.
      */
     fun perform(action: Action) {
-        if (selectedZone() == null) {
+        if (!connected || selectedZone() == null) {
             pendingActions.add(action, System.currentTimeMillis())
             start()
             return
@@ -379,9 +407,20 @@ class RoonClient(context: Context) : ZoneControl {
     }
 
     private fun execute(action: Action) {
-        val zone = selectedZone() ?: return
+        val zone = selectedZone()
+        if (zone == null || !connected) {
+            // Lost the Core between deciding to act and acting. Hold the press
+            // rather than dropping it silently.
+            pendingActions.add(action, System.currentTimeMillis())
+            start()
+            return
+        }
         when (action) {
-            Action.PLAY_PAUSE -> control("playpause")
+            // Explicit rather than Roon's playpause toggle: a toggle does
+            // nothing useful on a zone that has stopped rather than paused,
+            // which is the state a zone drifts into when left paused, whereas
+            // play resumes it.
+            Action.PLAY_PAUSE -> control(playPauseControl(zone))
             Action.NEXT -> control("next")
             Action.PREVIOUS -> control("previous")
             Action.VOLUME_UP -> changeVolumeSteps(nudgeSteps(zone))
@@ -538,6 +577,7 @@ class RoonClient(context: Context) : ZoneControl {
                 socket = null
                 pending.clear()
                 zoneStore.clear()
+                connected = false
                 selectedSnapshot = null
                 zonesSnapshot = emptyList()
                 status = Status(Stage.ERROR, coreName, "Lost connection: ${t.message}")
@@ -552,6 +592,7 @@ class RoonClient(context: Context) : ZoneControl {
                 socket = null
                 pending.clear()
                 zoneStore.clear()
+                connected = false
                 selectedSnapshot = null
                 zonesSnapshot = emptyList()
                 status = Status(Stage.IDLE, coreName, "Disconnected")
