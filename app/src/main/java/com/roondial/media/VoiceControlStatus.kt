@@ -49,6 +49,9 @@ object VoiceControlStatus {
             line("Session offers volume", canVolume)
             append('\n')
             line("Notifications allowed", notificationsAllowed)
+            if (!notificationsAllowed) {
+                append("  (media notifications are exempt, so this is not the blocker)\n")
+            }
             line("Media notification showing", mediaNotificationPosted)
             line("Takes audio focus", takesAudioFocus)
             line("Holds audio focus now", holdsAudioFocus)

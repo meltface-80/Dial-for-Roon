@@ -71,12 +71,28 @@ class RoonPlayer(
 
         applyVolume(builder, z)
 
-        if (z == null || np == null) {
-            // Nothing to show: an empty playlist is only legal in IDLE or ENDED,
-            // and IDLE also keeps the media notification away.
+        if (z == null) {
+            // Not connected to a Core: there is genuinely nothing to control.
             return builder
                 .setPlaybackState(Player.STATE_IDLE)
                 .setPlayWhenReady(false, Player.PLAY_WHEN_READY_CHANGE_REASON_REMOTE)
+                .build()
+        }
+
+        if (np == null) {
+            // A zone with nothing queued is still a live control surface, and
+            // saying so matters. media3 treats STATE_IDLE as nothing to show:
+            // it takes the notification away and stops counting the session as
+            // engaged, so an assistant asked to play finds a session with an
+            // empty timeline and no play command and does nothing. A zone
+            // Roon has stopped rather than paused lands here, which is exactly
+            // when "play" needs to work.
+            return builder
+                .setPlaylist(listOf(idleItem(z)))
+                .setCurrentMediaItemIndex(0)
+                .setPlaybackState(Player.STATE_READY)
+                .setPlayWhenReady(false, Player.PLAY_WHEN_READY_CHANGE_REASON_REMOTE)
+                .setContentPositionMs(0)
                 .build()
         }
 
@@ -117,7 +133,11 @@ class RoonPlayer(
             )
         if (z == null) return commands.build()
 
-        if (z.isPlayAllowed || z.isPauseAllowed) commands.add(Player.COMMAND_PLAY_PAUSE)
+        // Offered whenever there is a zone, not only when Roon currently
+        // reports it allowed. Withdrawing it makes the session look
+        // uncontrollable to an assistant at precisely the moment the user is
+        // asking it to start something.
+        commands.add(Player.COMMAND_PLAY_PAUSE)
         commands.add(Player.COMMAND_STOP)
         if (z.isNextAllowed) {
             commands.add(Player.COMMAND_SEEK_TO_NEXT)
@@ -193,6 +213,25 @@ class RoonPlayer(
                 lengthSeconds?.let { it.toLong() * 1_000_000L } ?: C.TIME_UNSET
             )
             .setIsSeekable(z.isSeekAllowed)
+            .setIsDynamic(false)
+            .build()
+    }
+
+    /** Stands for a zone that is connected but has nothing playing. */
+    private fun idleItem(z: Zone): MediaItemData {
+        val metadata = MediaMetadata.Builder()
+            .setTitle(z.displayName)
+            .setArtist("Nothing playing")
+            .setIsBrowsable(false)
+            .setIsPlayable(true)
+            .build()
+        return MediaItemData.Builder(UID_CURRENT)
+            .setMediaItem(
+                MediaItem.Builder().setMediaId(UID_CURRENT).setMediaMetadata(metadata).build()
+            )
+            .setMediaMetadata(metadata)
+            .setDurationUs(C.TIME_UNSET)
+            .setIsSeekable(false)
             .setIsDynamic(false)
             .build()
     }
