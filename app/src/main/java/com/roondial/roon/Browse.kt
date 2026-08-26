@@ -70,9 +70,10 @@ object BrowsePlan {
         played -> Outcome.Playing
         action == "list" -> Outcome.KeepWalking
         action == "message" -> Stop(message)
-        // "none" without having asked for anything to play means Roon had
-        // nothing more to offer.
-        else -> Outcome.Playing
+        // Reaching "none" — or a list-mutation instruction — without having
+        // invoked a play action means Roon rendered nothing and nothing was
+        // asked to play. That is a dead end, not success.
+        else -> Stop(null)
     }
 
     private fun Stop(message: String?) =
@@ -97,19 +98,25 @@ object BrowsePlan {
         val usable = items.filter { it.itemKey != null && it.hint != "header" }
         if (usable.isEmpty()) return Step.GiveUp("nothing to play")
 
-        val actions = usable.filter { listHint == "action_list" || it.hint == "action" }
+        val onActionLevel = listHint == "action_list"
+        val actions = usable.filter { onActionLevel || it.hint == "action" }
         if (actions.isNotEmpty()) {
-            for (wanted in PLAY_ACTIONS) {
-                val match = actions.firstOrNull { it.title.trim().lowercase() == wanted }
-                if (match?.itemKey != null) return Step.Play(match.itemKey, match.title)
+            val best = PLAY_ACTIONS.firstNotNullOfOrNull { wanted ->
+                actions.firstOrNull { it.title.trim().lowercase() == wanted }
+            } ?: actions.firstOrNull { it.title.trim().lowercase().startsWith("play") }
+
+            if (best?.itemKey == null) {
+                return Step.GiveUp("nothing here plays")
             }
-            // An unfamiliar action list: anything that starts with "play" beats
-            // guessing, and guessing wrong here queues or deletes something.
-            val anyPlay = actions.firstOrNull { it.title.trim().lowercase().startsWith("play") }
-            return if (anyPlay?.itemKey != null) {
-                Step.Play(anyPlay.itemKey, anyPlay.title)
+            // Only a leaf plays. "Play Album" and "Play Artist" are usually
+            // wrappers: opening one shows Play Now / Shuffle / Start Radio, and
+            // treating the wrapper as the play means reporting success having
+            // opened a submenu and started nothing. A missing hint on an
+            // action level is a known Roon quirk for tags — treat it as a leaf.
+            return if (best.hint == "action_list") {
+                Step.Descend(best.itemKey, best.title)
             } else {
-                Step.GiveUp("no play action in \"${actions.joinToString { it.title }}\"")
+                Step.Play(best.itemKey, best.title)
             }
         }
 

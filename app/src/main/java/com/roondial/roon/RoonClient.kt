@@ -17,6 +17,7 @@ import okio.ByteString.Companion.toByteString
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
+import kotlin.math.roundToInt
 
 /**
  * Speaks the Roon extension protocol directly: SOOD to find the Core, then a
@@ -65,7 +66,10 @@ class RoonClient(context: Context) : ZoneControl {
      * requests, because when the press arrives there may be no zone yet — and
      * "volume up" means a different number of steps on different outputs.
      */
-    enum class Action { PLAY_PAUSE, NEXT, PREVIOUS, VOLUME_UP, VOLUME_DOWN, TOGGLE_MUTE }
+    enum class Action {
+        PLAY_PAUSE, PLAY, PAUSE, NEXT, PREVIOUS,
+        VOLUME_UP, VOLUME_DOWN, TOGGLE_MUTE, MUTE, UNMUTE
+    }
 
     data class Status(val stage: Stage, val coreName: String? = null, val detail: String? = null)
 
@@ -422,12 +426,47 @@ class RoonClient(context: Context) : ZoneControl {
             // which is the state a zone drifts into when left paused, whereas
             // play resumes it.
             Action.PLAY_PAUSE -> control(playPauseControl(zone))
+            Action.PLAY -> control("play")
+            Action.PAUSE -> control("pause")
+            Action.MUTE -> setMuted(true)
+            Action.UNMUTE -> setMuted(false)
             Action.NEXT -> control("next")
             Action.PREVIOUS -> control("previous")
             Action.VOLUME_UP -> changeVolumeSteps(nudgeSteps(zone))
             Action.VOLUME_DOWN -> changeVolumeSteps(-nudgeSteps(zone))
             Action.TOGGLE_MUTE -> toggleMute()
         }
+    }
+
+    /** Sets the volume to a percentage of the output's usable range. */
+    fun setVolumePercent(percent: Int) {
+        val zone = selectedZone() ?: return
+        net.post {
+            for (out in zone.volumeOutputs) {
+                val vol = out.volume ?: continue
+                if (vol.isIncremental) continue
+                val span = vol.effectiveMax - vol.min
+                if (span <= 0.0) continue
+                val target = vol.min + span * (percent.coerceIn(0, 100) / 100.0)
+                sendRequest(
+                    SERVICE_TRANSPORT, "change_volume",
+                    JSONObject()
+                        .put("output_id", out.outputId)
+                        .put("how", "absolute")
+                        .put("value", target)
+                )
+            }
+        }
+    }
+
+    /**
+     * Moves the volume by [multiplier] of a normal nudge. Spoken requests
+     * carry a size — "turn it up a bit" against "turn it up a lot".
+     */
+    fun nudgeVolume(direction: Int, multiplier: Float) {
+        val zone = selectedZone() ?: return
+        val steps = (nudgeSteps(zone) * multiplier).roundToInt().coerceAtLeast(1)
+        changeVolumeSteps(if (direction < 0) -steps else steps)
     }
 
     /**
@@ -533,6 +572,8 @@ class RoonClient(context: Context) : ZoneControl {
     /** How far to walk before deciding Roon is not going to offer a play action. */
     private val maxBrowseDepth = 6
 
+    private var browseSession = 0
+
     sealed class SearchResult {
         data class Playing(val what: String) : SearchResult()
         data class NotFound(val reason: String) : SearchResult()
@@ -559,13 +600,18 @@ class RoonClient(context: Context) : ZoneControl {
         }
 
         net.post {
+            // Roon keeps the browse cursor server-side, and its auto-pop after
+            // an action leaves it mid-tree. A key per search stops one walk
+            // reading another's level.
+            val session = "dial-${browseSession++}"
             val body = JSONObject()
                 .put("hierarchy", "search")
+                .put("multi_session_key", session)
                 .put("input", trimmed)
                 .put("pop_all", true)
                 .put("zone_or_output_id", zone.zoneId)
             sendRequest(SERVICE_BROWSE, "browse", body) { msg ->
-                handleBrowse(msg, zone.zoneId, trimmed, 0, played = false, onResult = onResult)
+                handleBrowse(msg, zone.zoneId, session, trimmed, 0, false, onResult)
             }
         }
     }
@@ -577,6 +623,7 @@ class RoonClient(context: Context) : ZoneControl {
     private fun handleBrowse(
         msg: Moo.Message,
         zoneId: String,
+        session: String,
         query: String,
         depth: Int,
         played: Boolean,
@@ -612,10 +659,11 @@ class RoonClient(context: Context) : ZoneControl {
         val listHint = body.optJSONObject("list")?.optString("hint")?.takeIf { it.isNotEmpty() }
         val load = JSONObject()
             .put("hierarchy", "search")
+            .put("multi_session_key", session)
             .put("offset", 0)
             .put("count", 25)
         sendRequest(SERVICE_BROWSE, "load", load) { loadMsg ->
-            handleLoad(loadMsg, listHint, zoneId, query, depth, onResult)
+            handleLoad(loadMsg, listHint, zoneId, session, query, depth, onResult)
         }
     }
 
@@ -623,6 +671,7 @@ class RoonClient(context: Context) : ZoneControl {
         msg: Moo.Message,
         listHint: String?,
         zoneId: String,
+        session: String,
         query: String,
         depth: Int,
         onResult: (SearchResult) -> Unit
@@ -645,19 +694,17 @@ class RoonClient(context: Context) : ZoneControl {
                 finish(onResult, SearchResult.NotFound(step.reason))
 
             is BrowsePlan.Step.Play ->
-                browseInto(step.itemKey, zoneId, query, depth + 1, played = true, onResult = onResult)
+                browseInto(step.itemKey, zoneId, session, query, depth + 1, true, onResult)
 
             is BrowsePlan.Step.Descend ->
-                browseInto(
-                    step.itemKey, zoneId, step.title, depth + 1,
-                    played = false, onResult = onResult
-                )
+                browseInto(step.itemKey, zoneId, session, step.title, depth + 1, false, onResult)
         }
     }
 
     private fun browseInto(
         itemKey: String,
         zoneId: String,
+        session: String,
         label: String,
         depth: Int,
         played: Boolean,
@@ -665,10 +712,11 @@ class RoonClient(context: Context) : ZoneControl {
     ) {
         val body = JSONObject()
             .put("hierarchy", "search")
+            .put("multi_session_key", session)
             .put("item_key", itemKey)
             .put("zone_or_output_id", zoneId)
         sendRequest(SERVICE_BROWSE, "browse", body) { msg ->
-            handleBrowse(msg, zoneId, label, depth, played, onResult)
+            handleBrowse(msg, zoneId, session, label, depth, played, onResult)
         }
     }
 

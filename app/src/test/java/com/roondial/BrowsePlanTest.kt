@@ -58,6 +58,28 @@ class BrowsePlanTest {
     }
 
     @Test
+    fun opensAPlayWrapperRatherThanClaimingItPlayed() {
+        // "Play Album" and "Play Artist" are usually action_list wrappers: they
+        // open a submenu holding the real Play Now. Treating one as the play
+        // reports success having started nothing.
+        val step = BrowsePlan.next(
+            null,
+            listOf(item("Play Album", "action_list"), item("Track one", "action_list"))
+        )
+        assertEquals(BrowsePlan.Step.Descend("k-Play Album", "Play Album"), step)
+    }
+
+    @Test
+    fun treatsAMissingHintOnAnActionLevelAsALeaf() {
+        // Roon omits the hint on tag actions; pyroon works around the same bug.
+        val step = BrowsePlan.next(
+            "action_list",
+            listOf(BrowseItem("Play Now", null, "k1", null))
+        )
+        assertEquals(BrowsePlan.Step.Play("k1", "Play Now"), step)
+    }
+
+    @Test
     fun fallsBackToAnyPlayVerbItDoesNotKnow() {
         val step = BrowsePlan.next(
             "action_list",
@@ -118,6 +140,21 @@ class BrowseOutcomeTest {
         val outcome =
             BrowsePlan.afterBrowse(true, "message", isError = true, message = "Zone is busy")
         assertEquals(BrowsePlan.Outcome.Stop("Zone is busy"), outcome)
+    }
+
+    @Test
+    fun aDeadEndIsNotSuccess() {
+        // Reaching "none" without having asked for anything to play means Roon
+        // rendered nothing — the mirror image of the bug that reported failure
+        // over music that was playing.
+        assertTrue(
+            BrowsePlan.afterBrowse(false, "none", isError = false, message = "")
+                is BrowsePlan.Outcome.Stop
+        )
+        assertTrue(
+            BrowsePlan.afterBrowse(false, "remove_item", isError = false, message = "")
+                is BrowsePlan.Outcome.Stop
+        )
     }
 
     @Test

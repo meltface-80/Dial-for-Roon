@@ -25,9 +25,13 @@ data class WidgetGeometry(
     private val cx = widthPx / 2f
     private val cy = heightPx / 2f
 
-    private val radius = side / 2f - 8f * density
+    // DialView subtracts these in the bitmap's own pixels, and the bitmap is
+    // then scaled to `side`. Applying them unscaled here made the cells up to
+    // 30% too wide on a large, dense widget.
+    private val bitmapScale = side / WidgetDial.SIZE
+    private val radius = side / 2f - 8f * density * bitmapScale
     private val ringWidth = radius * 0.115f
-    private val innerRadius = radius - ringWidth - 10f * density
+    private val innerRadius = radius - ringWidth - 10f * density * bitmapScale
 
     /** Vertical centre of the four controls. */
     private val controlsY = cy + innerRadius * 0.58f

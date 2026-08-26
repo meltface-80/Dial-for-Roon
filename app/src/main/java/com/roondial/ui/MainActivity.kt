@@ -165,27 +165,68 @@ class MainActivity : Activity(), RoonClient.Listener, DialView.Callbacks {
             override fun onPartial(text: String) =
                 setVoice(DialView.Voice.Listening(text))
 
-            override fun onHeard(text: String) {
-                // "play Iron Maiden" is what people say; "Iron Maiden" is what
-                // Roon should be asked to find.
-                val query = SpokenQuery.clean(text)
-                if (query.isEmpty()) {
-                    say("Didn't catch that")
-                    return
+            override fun onHeard(text: String) = obey(text)
+
+            override fun onHeardAny(options: List<String>) {
+                // The recogniser's best guess is often "turn down for what"
+                // when the words were "turn down the volume". If a later guess
+                // reads cleanly as a command, prefer it — mishearing a command
+                // as a title replaces the queue and plays something loud.
+                val playing = client.selectedZone()?.isPlaying == true
+                val command = options.firstOrNull {
+                    SpokenCommand.parse(it, playing) !is SpokenCommand.Intent.Search
                 }
-                setVoice(DialView.Voice.Working(query))
-                client.searchAndPlay(query) { result ->
-                    when (result) {
-                        is RoonClient.SearchResult.Playing ->
-                            say("Playing ${result.what}")
-                        is RoonClient.SearchResult.NotFound ->
-                            say(result.reason)
-                    }
-                }
+                obey(command ?: options.first())
             }
 
             override fun onFailed(reason: String) = say(reason)
         })
+    }
+
+    /**
+     * Acts on what was said. A command is a command — "turn down the volume"
+     * used to be searched for, which played whatever came closest.
+     */
+    private fun obey(spoken: String) {
+        val playing = client.selectedZone()?.isPlaying == true
+        when (val intent = SpokenCommand.parse(spoken, playing)) {
+            is SpokenCommand.Intent.Search -> {
+                setVoice(DialView.Voice.Working(intent.query))
+                client.searchAndPlay(intent.query) { result ->
+                    when (result) {
+                        is RoonClient.SearchResult.Playing -> say("Playing ${result.what}")
+                        is RoonClient.SearchResult.NotFound -> say(result.reason)
+                    }
+                }
+            }
+            SpokenCommand.Intent.Play -> command(RoonClient.Action.PLAY, "Playing")
+            SpokenCommand.Intent.Pause -> command(RoonClient.Action.PAUSE, "Paused")
+            SpokenCommand.Intent.Next -> command(RoonClient.Action.NEXT, "Next track")
+            SpokenCommand.Intent.Previous -> command(RoonClient.Action.PREVIOUS, "Previous track")
+            SpokenCommand.Intent.Mute -> command(RoonClient.Action.MUTE, "Muted")
+            SpokenCommand.Intent.Unmute -> command(RoonClient.Action.UNMUTE, "Unmuted")
+            is SpokenCommand.Intent.VolumeUp -> {
+                client.nudgeVolume(1, factor(intent.amount)); say("Volume up")
+            }
+            is SpokenCommand.Intent.VolumeDown -> {
+                client.nudgeVolume(-1, factor(intent.amount)); say("Volume down")
+            }
+            is SpokenCommand.Intent.VolumePercent -> {
+                client.setVolumePercent(intent.percent); say("Volume ${intent.percent}%")
+            }
+            SpokenCommand.Intent.Nothing -> say("Didn't catch that")
+        }
+    }
+
+    private fun command(action: RoonClient.Action, said: String) {
+        client.perform(action)
+        say(said)
+    }
+
+    private fun factor(amount: SpokenCommand.Amount): Float = when (amount) {
+        SpokenCommand.Amount.SMALL -> 0.5f
+        SpokenCommand.Amount.NORMAL -> 1f
+        SpokenCommand.Amount.LARGE -> 3f
     }
 
     private fun setVoice(state: DialView.Voice) {
