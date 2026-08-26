@@ -175,6 +175,9 @@ class RoonWidgetProvider : AppWidgetProvider() {
             views.setOnClickPendingIntent(R.id.widget_previous, broadcast(context, ACTION_PREVIOUS))
             views.setOnClickPendingIntent(R.id.widget_volume_up, broadcast(context, ACTION_VOLUME_UP))
             views.setOnClickPendingIntent(R.id.widget_volume_down, broadcast(context, ACTION_VOLUME_DOWN))
+            // The widget cannot record audio, so its microphone opens the app
+            // already listening rather than pretending to hear from here.
+            views.setOnClickPendingIntent(R.id.widget_voice, openApp(context, listening = true))
             views.setOnClickPendingIntent(R.id.widget_open, openApp(context))
             views.setOnClickPendingIntent(R.id.widget_open_centre, openApp(context))
 
@@ -189,12 +192,16 @@ class RoonWidgetProvider : AppWidgetProvider() {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
 
-        private fun openApp(context: Context): PendingIntent {
+        private fun openApp(context: Context, listening: Boolean = false): PendingIntent {
             val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)
                 ?: Intent()
+            if (listening) {
+                intent.putExtra(com.roondial.ui.MainActivity.EXTRA_START_VOICE, true)
+                intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            }
             return PendingIntent.getActivity(
                 context,
-                0,
+                if (listening) 1 else 0,
                 intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )

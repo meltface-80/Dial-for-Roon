@@ -85,6 +85,7 @@ class DialView @JvmOverloads constructor(
         fun onPrevious()
         fun onZoneTapped()
         fun onMuteTapped()
+        fun onVoiceTapped()
         fun onLongPress()
     }
 
@@ -93,6 +94,24 @@ class DialView @JvmOverloads constructor(
     private var zone: Zone? = null
     private var statusText: String = "Starting…"
     private var artwork: Bitmap? = null
+
+    /**
+     * What the microphone is doing. While it is anything but idle the dial
+     * shows it instead of what is playing, because that is what the user is
+     * looking at the screen for.
+     */
+    sealed class Voice {
+        object Idle : Voice()
+        data class Listening(val heard: String) : Voice()
+        data class Working(val query: String) : Voice()
+        data class Said(val message: String) : Voice()
+    }
+
+    var voice: Voice = Voice.Idle
+        set(value) {
+            field = value
+            invalidate()
+        }
 
     // Geometry, recomputed on layout.
     private var cx = 0f
@@ -374,6 +393,38 @@ class DialView @JvmOverloads constructor(
             return
         }
 
+        val currentVoice = voice
+        if (currentVoice !is Voice.Idle) {
+            val heading = when (currentVoice) {
+                is Voice.Listening -> "Listening…"
+                is Voice.Working -> "Searching Roon"
+                is Voice.Said -> ""
+                else -> ""
+            }
+            val detail = when (currentVoice) {
+                is Voice.Listening -> currentVoice.heard
+                is Voice.Working -> currentVoice.query
+                is Voice.Said -> currentVoice.message
+                else -> ""
+            }
+            if (heading.isNotEmpty()) {
+                textPaint.color = TEXT_SECONDARY
+                textPaint.isFakeBoldText = false
+                textPaint.textSize = innerRadius * 0.12f
+                canvas.drawText(heading, cx, cy - innerRadius * 0.16f, textPaint)
+            }
+            textPaint.color = TEXT_PRIMARY
+            textPaint.isFakeBoldText = true
+            textPaint.textSize = innerRadius * 0.15f
+            var y = cy + innerRadius * 0.04f
+            for (line in wrap(detail, 22).take(3)) {
+                canvas.drawText(ellipsise(line, innerRadius * 1.6f), cx, y, textPaint)
+                y += innerRadius * 0.19f
+            }
+            textPaint.isFakeBoldText = false
+            return
+        }
+
         val np = z?.nowPlaying
         if (np == null) {
             textPaint.color = TEXT_SECONDARY
@@ -408,31 +459,71 @@ class DialView @JvmOverloads constructor(
         }
     }
 
-    private fun transportCentres(): Triple<Float, Float, Float> {
-        transportY = cy + innerRadius * 0.60f
-        val dx = innerRadius * 0.42f
-        return Triple(cx - dx, cx, cx + dx)
+    /** Previous, play/pause, next, microphone — evenly spaced across the dial. */
+    private fun controlCentres(): FloatArray {
+        transportY = cy + innerRadius * 0.58f
+        val spacing = innerRadius * 0.38f
+        return floatArrayOf(
+            cx - spacing * 1.5f,
+            cx - spacing * 0.5f,
+            cx + spacing * 0.5f,
+            cx + spacing * 1.5f
+        )
     }
 
     private var transportY = 0f
-    private val transportRadius: Float get() = innerRadius * 0.17f
+    private val transportRadius: Float get() = innerRadius * 0.16f
 
     private fun drawTransport(canvas: Canvas, z: Zone?) {
-        val (prevX, playX, nextX) = transportCentres()
+        val centres = controlCentres()
         val y = transportY
         val r = transportRadius
+        val listening = voice !is Voice.Idle
 
         paint.style = Paint.Style.FILL
         paint.color = Color.argb(70, 255, 255, 255)
-        canvas.drawCircle(playX, y, r, paint)
+        canvas.drawCircle(centres[1], y, r, paint)
+        paint.color = if (listening) RING_FILL else Color.argb(70, 255, 255, 255)
+        canvas.drawCircle(centres[3], y, r, paint)
 
         iconPaint.style = Paint.Style.FILL
         iconPaint.color = if (z == null) TEXT_SECONDARY else TEXT_PRIMARY
 
-        drawSkip(canvas, prevX, y, r * 0.62f, back = true)
-        if (z?.isPlaying == true) drawPause(canvas, playX, y, r * 0.52f)
-        else drawPlay(canvas, playX, y, r * 0.58f)
-        drawSkip(canvas, nextX, y, r * 0.62f, back = false)
+        drawSkip(canvas, centres[0], y, r * 0.62f, back = true)
+        if (z?.isPlaying == true) drawPause(canvas, centres[1], y, r * 0.52f)
+        else drawPlay(canvas, centres[1], y, r * 0.58f)
+        drawSkip(canvas, centres[2], y, r * 0.62f, back = false)
+
+        iconPaint.color = if (listening) 0xFF07080A.toInt() else TEXT_PRIMARY
+        drawMicrophone(canvas, centres[3], y, r * 0.62f)
+    }
+
+    private fun drawMicrophone(canvas: Canvas, x: Float, y: Float, s: Float) {
+        // A capsule, a cradle under it, a stem: narrow enough to read as a
+        // microphone rather than as a circle at this size.
+        val capsuleHalfWidth = s * 0.30f
+        canvas.drawRoundRect(
+            x - capsuleHalfWidth, y - s * 0.95f,
+            x + capsuleHalfWidth, y + s * 0.12f,
+            capsuleHalfWidth, capsuleHalfWidth, iconPaint
+        )
+
+        val cradle = s * 0.60f
+        val stroke = s * 0.17f
+        iconPaint.style = Paint.Style.STROKE
+        iconPaint.strokeWidth = stroke
+        iconPaint.strokeCap = Paint.Cap.ROUND
+        canvas.drawArc(
+            x - cradle, y - cradle * 0.55f,
+            x + cradle, y + cradle * 1.00f,
+            0f, 180f, false, iconPaint
+        )
+        iconPaint.style = Paint.Style.FILL
+
+        canvas.drawRect(
+            x - stroke * 0.45f, y + cradle * 0.72f,
+            x + stroke * 0.45f, y + s * 1.02f, iconPaint
+        )
     }
 
     private fun drawPlay(canvas: Canvas, x: Float, y: Float, s: Float) {
@@ -618,20 +709,19 @@ class DialView @JvmOverloads constructor(
     }
 
     private fun handleTap(x: Float, y: Float) {
-        val (prevX, playX, nextX) = transportCentres()
-        val r = transportRadius * 1.35f
+        val centres = controlCentres()
+        val r = transportRadius * 1.30f
 
-        if (hypot((x - playX).toDouble(), (y - transportY).toDouble()) <= r) {
+        for ((index, centre) in centres.withIndex()) {
+            if (hypot((x - centre).toDouble(), (y - transportY).toDouble()) > r) continue
             performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
-            callbacks?.onPlayPause(); return
-        }
-        if (hypot((x - prevX).toDouble(), (y - transportY).toDouble()) <= r) {
-            performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
-            callbacks?.onPrevious(); return
-        }
-        if (hypot((x - nextX).toDouble(), (y - transportY).toDouble()) <= r) {
-            performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
-            callbacks?.onNext(); return
+            when (index) {
+                0 -> callbacks?.onPrevious()
+                1 -> callbacks?.onPlayPause()
+                2 -> callbacks?.onNext()
+                else -> callbacks?.onVoiceTapped()
+            }
+            return
         }
         // Upper third of the inner circle: zone name and volume readout.
         if (y < cy - innerRadius * 0.50f) { callbacks?.onZoneTapped(); return }

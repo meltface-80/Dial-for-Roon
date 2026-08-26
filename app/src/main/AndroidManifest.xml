@@ -10,6 +10,15 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <!-- Android 11+ hides other packages unless asked for: without this the
+         speech recogniser cannot be found. -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+    </queries>
     <!-- The media session lives in a foreground service so voice control and
          the notification keep working with the app off screen. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />

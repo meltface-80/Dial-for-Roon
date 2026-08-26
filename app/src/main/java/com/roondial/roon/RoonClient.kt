@@ -41,6 +41,7 @@ class RoonClient(context: Context) : ZoneControl {
         const val EXTENSION_ID = "com.roondial.android"
         const val SERVICE_TRANSPORT = "com.roonlabs.transport:2"
         const val SERVICE_IMAGE = "com.roonlabs.image:1"
+        const val SERVICE_BROWSE = "com.roonlabs.browse:1"
         const val SERVICE_PING = "com.roonlabs.ping:1"
         const val SERVICE_REGISTRY = "com.roonlabs.registry:1"
 
@@ -325,7 +326,7 @@ class RoonClient(context: Context) : ZoneControl {
             put("email", "noreply@example.com")
             put("website", "https://github.com/meltface-80/Display-extension-apk")
             put("required_services", JSONArray().put(SERVICE_TRANSPORT))
-            put("optional_services", JSONArray().put(SERVICE_IMAGE))
+            put("optional_services", JSONArray().put(SERVICE_IMAGE).put(SERVICE_BROWSE))
             put("provided_services", JSONArray().put(SERVICE_PING))
             tokenFor(coreId)?.let { put("token", it) }
         }
@@ -525,6 +526,144 @@ class RoonClient(context: Context) : ZoneControl {
         if (port <= 0) return null
         return "http://$h:$port/api/image/$imageKey" +
             "?scale=fit&width=$size&height=$size&format=image/jpeg"
+    }
+
+    // ---------------------------------------------------------------- search
+
+    /** How far to walk before deciding Roon is not going to offer a play action. */
+    private val maxBrowseDepth = 6
+
+    sealed class SearchResult {
+        data class Playing(val what: String) : SearchResult()
+        data class NotFound(val reason: String) : SearchResult()
+    }
+
+    /**
+     * Finds [query] in Roon and plays it in the selected zone.
+     *
+     * Roon's browse API is a hierarchy walk rather than a query language, so
+     * this searches, then keeps opening the first real result until it reaches
+     * a list of actions, then takes the one that plays. Everything about which
+     * item to open lives in BrowsePlan; this only moves between levels.
+     */
+    fun searchAndPlay(query: String, onResult: (SearchResult) -> Unit) {
+        val zone = selectedZone()
+        if (zone == null || !connected) {
+            main.post { onResult(SearchResult.NotFound("Not connected to a zone")) }
+            return
+        }
+        val trimmed = query.trim()
+        if (trimmed.isEmpty()) {
+            main.post { onResult(SearchResult.NotFound("Nothing heard")) }
+            return
+        }
+
+        net.post {
+            val body = JSONObject()
+                .put("hierarchy", "search")
+                .put("input", trimmed)
+                .put("pop_all", true)
+                .put("zone_or_output_id", zone.zoneId)
+            sendRequest(SERVICE_BROWSE, "browse", body) { msg ->
+                handleBrowse(msg, zone.zoneId, trimmed, 0, onResult)
+            }
+        }
+    }
+
+    private fun finish(onResult: (SearchResult) -> Unit, result: SearchResult) {
+        main.post { onResult(result) }
+    }
+
+    private fun handleBrowse(
+        msg: Moo.Message,
+        zoneId: String,
+        query: String,
+        depth: Int,
+        onResult: (SearchResult) -> Unit
+    ) {
+        val body = msg.bodyText?.let { JSONObject(it) }
+        if (msg.name != "Success" || body == null) {
+            finish(onResult, SearchResult.NotFound("Roon refused the search"))
+            return
+        }
+
+        when (body.optString("action")) {
+            "list" -> Unit
+            "message" -> {
+                finish(
+                    onResult,
+                    SearchResult.NotFound(body.optString("message").ifEmpty { "Roon had nothing" })
+                )
+                return
+            }
+            else -> {
+                // "none" after a play action: the music has started.
+                finish(onResult, SearchResult.Playing(query))
+                return
+            }
+        }
+
+        if (depth >= maxBrowseDepth) {
+            finish(onResult, SearchResult.NotFound("Could not find a way to play that"))
+            return
+        }
+
+        val listHint = body.optJSONObject("list")?.optString("hint")?.takeIf { it.isNotEmpty() }
+        val load = JSONObject()
+            .put("hierarchy", "search")
+            .put("offset", 0)
+            .put("count", 25)
+        sendRequest(SERVICE_BROWSE, "load", load) { loadMsg ->
+            handleLoad(loadMsg, listHint, zoneId, query, depth, onResult)
+        }
+    }
+
+    private fun handleLoad(
+        msg: Moo.Message,
+        listHint: String?,
+        zoneId: String,
+        query: String,
+        depth: Int,
+        onResult: (SearchResult) -> Unit
+    ) {
+        val body = msg.bodyText?.let { JSONObject(it) }
+        if (msg.name != "Success" || body == null) {
+            finish(onResult, SearchResult.NotFound("Roon returned nothing for that"))
+            return
+        }
+
+        val items = ArrayList<BrowseItem>()
+        body.optJSONArray("items")?.let { arr ->
+            for (i in 0 until arr.length()) items += BrowseItem.parse(arr.getJSONObject(i))
+        }
+        val hint = body.optJSONObject("list")?.optString("hint")?.takeIf { it.isNotEmpty() }
+            ?: listHint
+
+        when (val step = BrowsePlan.next(hint, items)) {
+            is BrowsePlan.Step.GiveUp ->
+                finish(onResult, SearchResult.NotFound(step.reason))
+
+            is BrowsePlan.Step.Play -> browseInto(step.itemKey, zoneId, query, depth + 1, onResult)
+
+            is BrowsePlan.Step.Descend ->
+                browseInto(step.itemKey, zoneId, step.title, depth + 1, onResult)
+        }
+    }
+
+    private fun browseInto(
+        itemKey: String,
+        zoneId: String,
+        label: String,
+        depth: Int,
+        onResult: (SearchResult) -> Unit
+    ) {
+        val body = JSONObject()
+            .put("hierarchy", "search")
+            .put("item_key", itemKey)
+            .put("zone_or_output_id", zoneId)
+        sendRequest(SERVICE_BROWSE, "browse", body) { msg ->
+            handleBrowse(msg, zoneId, label, depth, onResult)
+        }
     }
 
     // ------------------------------------------------------------- plumbing
