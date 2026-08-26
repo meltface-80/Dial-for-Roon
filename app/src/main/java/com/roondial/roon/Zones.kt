@@ -1,5 +1,6 @@
 package com.roondial.roon
 
+import org.json.JSONArray
 import org.json.JSONObject
 
 /**
@@ -20,9 +21,16 @@ data class Volume(
 ) {
     val isIncremental: Boolean get() = type == "incremental"
 
-    /** Highest value the ring should be able to reach. */
+    /**
+     * The highest value a control should be able to reach.
+     *
+     * Roon's soft limit is a ceiling the user set on the device precisely so a
+     * remote cannot go past it, so a dial that swept to [max] would drive the
+     * volume somewhere its owner had already said it must not go.
+     */
     val effectiveMax: Double get() = softLimit?.coerceAtMost(max) ?: max
 
+    /** Where the value sits between [min] and [effectiveMax], as 0f..1f. */
     val fraction: Float
         get() {
             if (isIncremental) return 0f
@@ -31,19 +39,20 @@ data class Volume(
             return ((value - min) / span).coerceIn(0.0, 1.0).toFloat()
         }
 
-    fun format(): String = when (type) {
-        "db" -> String.format("%.1f dB", value)
-        "incremental" -> if (isMuted) "muted" else "+/-"
-        else -> if (value == Math.floor(value)) value.toInt().toString()
-                else String.format("%.1f", value)
+    /** How the value reads to a person, in whatever unit the device counts in. */
+    fun format(): String = when {
+        isMuted -> "muted"
+        type == "db" -> String.format("%.1f dB", value)
+        type == "incremental" -> "+/-"
+        value == Math.floor(value) -> value.toInt().toString()
+        else -> String.format("%.1f", value)
     }
 
     companion object {
         fun parse(o: JSONObject?): Volume? {
             if (o == null) return null
-            val type = o.optString("type", "number")
             return Volume(
-                type = type,
+                type = o.str("type", "number"),
                 min = o.optDouble("min", 0.0).orZero(),
                 max = o.optDouble("max", 100.0).orZero(),
                 value = o.optDouble("value", 0.0).orZero(),
@@ -57,17 +66,98 @@ data class Volume(
     }
 }
 
-data class Output(
-    val outputId: String,
+/**
+ * One of an output's source controls: Roon's handle on the physical device
+ * behind it — the amp or DAC that can be put into standby or switched input.
+ */
+data class SourceControl(
+    val controlKey: String,
     val displayName: String,
-    val volume: Volume?
+    /** "selected" | "deselected" | "standby" | "indeterminate". */
+    val status: String,
+    val supportsStandby: Boolean
 ) {
     companion object {
-        fun parse(o: JSONObject): Output = Output(
-            outputId = o.optString("output_id"),
-            displayName = o.optString("display_name"),
-            volume = Volume.parse(o.optJSONObject("volume"))
-        )
+        private val KNOWN = setOf("selected", "deselected", "standby")
+
+        /**
+         * Only controls that can actually be addressed are kept. A control with
+         * no `control_key` cannot be targeted individually and Roon's
+         * toggle_standby is defined per control, so a keyless one would render
+         * a power button that silently does nothing.
+         */
+        fun parseAll(arr: JSONArray?, fallbackName: String): List<SourceControl> {
+            if (arr == null) return emptyList()
+            val out = ArrayList<SourceControl>(arr.length())
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                val key = o.str("control_key").takeIf { it.isNotEmpty() } ?: continue
+                val status = o.str("status")
+                out += SourceControl(
+                    controlKey = key,
+                    displayName = o.str("display_name").takeIf { it.isNotEmpty() } ?: fallbackName,
+                    status = if (status in KNOWN) status else "indeterminate",
+                    supportsStandby = o.optBoolean("supports_standby", false)
+                )
+            }
+            return out
+        }
+    }
+}
+
+data class Output(
+    val outputId: String,
+    val zoneId: String?,
+    val displayName: String,
+    val volume: Volume?,
+    /**
+     * Roon's own answer to "what may this be grouped with". Null when the Core
+     * doesn't send it, which reads as "unknown, offer everything" rather than
+     * "nothing is groupable".
+     */
+    val canGroupWith: List<String>?,
+    val sourceControls: List<SourceControl>
+) {
+    companion object {
+        fun parse(o: JSONObject): Output {
+            val name = o.str("display_name")
+            val group = o.optJSONArray("can_group_with_output_ids")?.let { arr ->
+                (0 until arr.length()).mapNotNull { arr.str(it).takeIf(String::isNotEmpty) }
+            }
+            return Output(
+                outputId = o.str("output_id"),
+                zoneId = o.str("zone_id").takeIf { it.isNotEmpty() },
+                displayName = name,
+                volume = Volume.parse(o.optJSONObject("volume")),
+                canGroupWith = group,
+                sourceControls = SourceControl.parseAll(o.optJSONArray("source_controls"), name)
+            )
+        }
+    }
+}
+
+/**
+ * Roon's per-zone playback modes, normalised so no caller has to cope with a
+ * missing `settings` block (a zone that has never been played doesn't get one).
+ * `loop` keeps Roon's own vocabulary; anything unrecognised reads as off rather
+ * than being passed through — a value the UI can't render is worse than off.
+ */
+data class ZoneSettings(
+    val shuffle: Boolean,
+    val loop: String,
+    val autoRadio: Boolean
+) {
+    companion object {
+        val LOOP_MODES = listOf("disabled", "loop", "loop_one")
+
+        fun parse(o: JSONObject?): ZoneSettings {
+            val loop = o?.str("loop")
+            return ZoneSettings(
+                shuffle = o?.optBoolean("shuffle", false) ?: false,
+                loop = if (loop == "loop" || loop == "loop_one") loop else "disabled",
+                autoRadio = o?.optBoolean("auto_radio", false) ?: false
+            )
+        }
     }
 }
 
@@ -87,12 +177,12 @@ data class NowPlaying(
             val one = o.optJSONObject("one_line")
             val src = three ?: two ?: one
             return NowPlaying(
-                line1 = src?.optString("line1").orEmpty(),
-                line2 = src?.optString("line2").orEmpty(),
-                line3 = src?.optString("line3").orEmpty(),
+                line1 = src?.str("line1").orEmpty(),
+                line2 = src?.str("line2").orEmpty(),
+                line3 = src?.str("line3").orEmpty(),
                 lengthSeconds = o.optInt("length", -1).takeIf { it >= 0 },
                 seekPosition = o.optInt("seek_position", -1).takeIf { it >= 0 },
-                imageKey = o.optString("image_key").takeIf { it.isNotEmpty() }
+                imageKey = o.str("image_key").takeIf { it.isNotEmpty() }
             )
         }
     }
@@ -107,6 +197,7 @@ data class Zone(
     val isNextAllowed: Boolean,
     val isPreviousAllowed: Boolean,
     val isSeekAllowed: Boolean,
+    val settings: ZoneSettings,
     val outputs: List<Output>,
     val nowPlaying: NowPlaying?
 ) {
@@ -114,13 +205,20 @@ data class Zone(
 
     /**
      * Volume lives on outputs, not zones. A grouped zone has one output per
-     * device, each with its own type, range and step, so the ring drives all
-     * of them and displays the first one that actually has a control.
+     * device, each with its own type, range and step.
      */
     val volumeOutputs: List<Output> get() = outputs.filter { it.volume != null }
 
     val primaryVolume: Volume? get() = volumeOutputs.firstOrNull()?.volume
 
+    /**
+     * Whether anything in this zone has a volume control at all.
+     *
+     * Plenty do not: a DAC fed at unity, or an output going into an amp with
+     * its own knob, reports no volume object. Anything drawing a control has to
+     * ask first — offering buttons that cannot move anything is worse than
+     * showing none, because the user presses them and concludes it is broken.
+     */
     val hasVolumeControl: Boolean get() = volumeOutputs.isNotEmpty()
 
     companion object {
@@ -130,14 +228,15 @@ data class Zone(
                 for (i in 0 until arr.length()) outs += Output.parse(arr.getJSONObject(i))
             }
             return Zone(
-                zoneId = o.optString("zone_id"),
-                displayName = o.optString("display_name"),
-                state = o.optString("state", "stopped"),
+                zoneId = o.str("zone_id"),
+                displayName = o.str("display_name"),
+                state = o.str("state", "stopped"),
                 isPlayAllowed = o.optBoolean("is_play_allowed", false),
                 isPauseAllowed = o.optBoolean("is_pause_allowed", false),
                 isNextAllowed = o.optBoolean("is_next_allowed", false),
                 isPreviousAllowed = o.optBoolean("is_previous_allowed", false),
                 isSeekAllowed = o.optBoolean("is_seek_allowed", false),
+                settings = ZoneSettings.parse(o.optJSONObject("settings")),
                 outputs = outs,
                 nowPlaying = NowPlaying.parse(o.optJSONObject("now_playing"))
             )
@@ -148,12 +247,50 @@ data class Zone(
 /**
  * Applies the subscribe_zones stream. The first message is "Subscribed" with
  * the full set; everything after is "Changed" with added/removed/changed
- * deltas plus a separate, much more frequent seek-position delta.
+ * deltas plus a separate, much more frequent seek-position delta that must not
+ * clobber anything else.
  */
 class ZoneStore {
+    /**
+     * Guards [zones] and [revision]. The feed is written by the socket thread
+     * and read by the UI and the media session, which was an unguarded
+     * LinkedHashMap across threads.
+     */
+    private val lock = Object()
     private val zones = LinkedHashMap<String, Zone>()
+    private var revision = 0L
 
-    fun applySubscribed(body: JSONObject) {
+    /**
+     * Bumped when something MATERIAL changes — a zone appears, disappears,
+     * starts, stops, or moves to another track.
+     *
+     * Deliberately NOT bumped by a seek-position update. Roon sends one of
+     * those roughly every second for every playing zone, so waking a waiter on
+     * them would turn a long wait straight back into a 1 Hz poll.
+     */
+    val version: Long get() = synchronized(lock) { revision }
+
+    /**
+     * Blocks until [version] moves past [since], then returns it. Returns
+     * immediately if it has already moved, and after [timeoutMs] regardless.
+     */
+    fun awaitChange(since: Long, timeoutMs: Long): Long = synchronized(lock) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (revision <= since) {
+            val remaining = deadline - System.currentTimeMillis()
+            if (remaining <= 0) break
+            // A spurious wakeup returns to the loop condition, not out of it.
+            (lock as Object).wait(remaining)
+        }
+        revision
+    }
+
+    private fun bump() {
+        revision++
+        (lock as Object).notifyAll()
+    }
+
+    fun applySubscribed(body: JSONObject) = synchronized(lock) {
         zones.clear()
         body.optJSONArray("zones")?.let { arr ->
             for (i in 0 until arr.length()) {
@@ -161,39 +298,93 @@ class ZoneStore {
                 zones[z.zoneId] = z
             }
         }
+        bump()
     }
 
-    fun applyChanged(body: JSONObject) {
+    fun applyChanged(body: JSONObject) = synchronized(lock) {
+        var material = false
         body.optJSONArray("zones_removed")?.let { arr ->
             for (i in 0 until arr.length()) zones.remove(arr.getString(i))
+            if (arr.length() > 0) material = true
         }
         body.optJSONArray("zones_added")?.let { arr ->
             for (i in 0 until arr.length()) {
                 val z = Zone.parse(arr.getJSONObject(i))
                 zones[z.zoneId] = z
             }
+            if (arr.length() > 0) material = true
         }
         body.optJSONArray("zones_changed")?.let { arr ->
             for (i in 0 until arr.length()) {
                 val z = Zone.parse(arr.getJSONObject(i))
                 zones[z.zoneId] = z
             }
+            if (arr.length() > 0) material = true
         }
         body.optJSONArray("zones_seek_changed")?.let { arr ->
             for (i in 0 until arr.length()) {
                 val e = arr.getJSONObject(i)
-                val zoneId = e.optString("zone_id")
+                val zoneId = e.str("zone_id")
                 val existing = zones[zoneId] ?: continue
                 val np = existing.nowPlaying ?: continue
                 val pos = e.optInt("seek_position", -1).takeIf { it >= 0 } ?: continue
                 zones[zoneId] = existing.copy(nowPlaying = np.copy(seekPosition = pos))
             }
+            // No bump: see [version]. A ticking clock is not news.
+        }
+        if (material) bump()
+    }
+
+    fun clear() = synchronized(lock) {
+        zones.clear()
+        bump()
+    }
+
+    fun all(): List<Zone> = synchronized(lock) {
+        zones.values.sortedBy { it.displayName.lowercase() }
+    }
+
+    fun byId(id: String?): Zone? =
+        if (id == null) null else synchronized(lock) { zones[id] }
+}
+
+/**
+ * The outputs feed, a separate subscription from zones: every output the Core
+ * knows about, including ones not currently part of any zone on screen.
+ */
+class OutputStore {
+    private val lock = Object()
+    private val outputs = LinkedHashMap<String, Output>()
+
+    fun applySubscribed(body: JSONObject) = synchronized(lock) {
+        outputs.clear()
+        body.optJSONArray("outputs")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                val o = Output.parse(arr.getJSONObject(i))
+                outputs[o.outputId] = o
+            }
         }
     }
 
-    fun clear() = zones.clear()
+    fun applyChanged(body: JSONObject) = synchronized(lock) {
+        body.optJSONArray("outputs_removed")?.let { arr ->
+            for (i in 0 until arr.length()) outputs.remove(arr.getString(i))
+        }
+        for (key in listOf("outputs_added", "outputs_changed")) {
+            body.optJSONArray(key)?.let { arr ->
+                for (i in 0 until arr.length()) {
+                    val o = Output.parse(arr.getJSONObject(i))
+                    outputs[o.outputId] = o
+                }
+            }
+        }
+    }
 
-    fun all(): List<Zone> = zones.values.sortedBy { it.displayName.lowercase() }
+    fun clear() = synchronized(lock) { outputs.clear() }
 
-    fun byId(id: String?): Zone? = if (id == null) null else zones[id]
+    fun all(): List<Output> = synchronized(lock) {
+        outputs.values.sortedBy { it.displayName.lowercase() }
+    }
+
+    fun isEmpty(): Boolean = synchronized(lock) { outputs.isEmpty() }
 }

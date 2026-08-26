@@ -315,8 +315,8 @@ class RoonClient(context: Context) : ZoneControl {
         backoffMs = 1000L
         sendRequest(SERVICE_REGISTRY, "info") { msg ->
             val body = msg.bodyText?.let { JSONObject(it) }
-            coreId = body?.optString("core_id")?.takeIf { it.isNotEmpty() }
-            coreName = body?.optString("display_name")?.takeIf { it.isNotEmpty() } ?: coreName
+            coreId = body?.str("core_id")?.takeIf { it.isNotEmpty() }
+            coreName = body?.str("display_name")?.takeIf { it.isNotEmpty() } ?: coreName
             register()
         }
     }
@@ -344,10 +344,10 @@ class RoonClient(context: Context) : ZoneControl {
         sendRequest(SERVICE_REGISTRY, "register", reginfo) { msg ->
             if (msg.name == "Registered") {
                 val body = msg.bodyText?.let { JSONObject(it) }
-                val id = body?.optString("core_id")?.takeIf { it.isNotEmpty() } ?: coreId
+                val id = body?.str("core_id")?.takeIf { it.isNotEmpty() } ?: coreId
                 coreId = id
-                coreName = body?.optString("display_name")?.takeIf { it.isNotEmpty() } ?: coreName
-                body?.optString("token")?.takeIf { it.isNotEmpty() }?.let { saveToken(id, it) }
+                coreName = body?.str("display_name")?.takeIf { it.isNotEmpty() } ?: coreName
+                body?.str("token")?.takeIf { it.isNotEmpty() }?.let { saveToken(id, it) }
                 status = Status(Stage.CONNECTED, coreName, "Paired with ${coreName ?: "Roon"}")
                 subscribeZones()
             } else {
@@ -637,9 +637,9 @@ class RoonClient(context: Context) : ZoneControl {
 
         val outcome = BrowsePlan.afterBrowse(
             played = played,
-            action = body.optString("action"),
+            action = body.str("action"),
             isError = body.optBoolean("is_error", false),
-            message = body.optString("message")
+            message = body.str("message")
         )
         when (outcome) {
             is BrowsePlan.Outcome.Playing -> {
@@ -656,7 +656,7 @@ class RoonClient(context: Context) : ZoneControl {
             return
         }
 
-        val listHint = body.optJSONObject("list")?.optString("hint")?.takeIf { it.isNotEmpty() }
+        val listHint = body.optJSONObject("list")?.str("hint")?.takeIf { it.isNotEmpty() }
         val load = JSONObject()
             .put("hierarchy", "search")
             .put("multi_session_key", session)
@@ -686,7 +686,7 @@ class RoonClient(context: Context) : ZoneControl {
         body.optJSONArray("items")?.let { arr ->
             for (i in 0 until arr.length()) items += BrowseItem.parse(arr.getJSONObject(i))
         }
-        val hint = body.optJSONObject("list")?.optString("hint")?.takeIf { it.isNotEmpty() }
+        val hint = body.optJSONObject("list")?.str("hint")?.takeIf { it.isNotEmpty() }
             ?: listHint
 
         when (val step = BrowsePlan.next(hint, items)) {

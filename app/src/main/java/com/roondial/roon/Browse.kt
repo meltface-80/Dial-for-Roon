@@ -12,10 +12,10 @@ data class BrowseItem(
 ) {
     companion object {
         fun parse(o: JSONObject) = BrowseItem(
-            title = o.optString("title"),
-            subtitle = o.optString("subtitle").takeIf { it.isNotEmpty() },
-            itemKey = o.optString("item_key").takeIf { it.isNotEmpty() },
-            hint = o.optString("hint").takeIf { it.isNotEmpty() }
+            title = o.str("title"),
+            subtitle = o.str("subtitle").takeIf { it.isNotEmpty() },
+            itemKey = o.str("item_key").takeIf { it.isNotEmpty() },
+            hint = o.str("hint").takeIf { it.isNotEmpty() }
         )
     }
 }
