@@ -15,7 +15,7 @@ Docker, no Node host, no companion service.
 
 ## Install
 
-### [⬇ Download the APK](https://github.com/meltface-80/Display-extension-apk/raw/main/dist/dial-for-roon-0.11.0.apk)
+### [⬇ Download the APK](https://github.com/meltface-80/Dial-for-Roon/raw/main/dist/dial-for-roon-0.11.0.apk)
 
 Android 8.0 (API 26) or newer. Sideload it, then once:
 
