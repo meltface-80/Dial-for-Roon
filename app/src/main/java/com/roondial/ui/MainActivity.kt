@@ -35,6 +35,10 @@ class MainActivity : Activity(), RoonClient.Listener, DialView.Callbacks {
         private const val TAG = "RoonDial"
         private const val DEFAULT_PORT = 9330
         private const val REQUEST_NOTIFICATIONS = 1
+        private const val REQUEST_MICROPHONE = 2
+
+        /** Set by the widget's microphone so the app opens already listening. */
+        const val EXTRA_START_VOICE = "com.roondial.START_VOICE"
     }
 
     private lateinit var dial: DialView
@@ -44,6 +48,8 @@ class MainActivity : Activity(), RoonClient.Listener, DialView.Callbacks {
     private var zones: List<Zone> = emptyList()
     private var artKey: String? = null
     private val artLoader = Executors.newSingleThreadExecutor()
+    private val voiceInput by lazy { VoiceInput(this) }
+    private val voiceHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -80,6 +86,12 @@ class MainActivity : Activity(), RoonClient.Listener, DialView.Callbacks {
         // lifetime so voice control survives leaving the app.
         client = (application as RoonApp).roon
         requestNotificationPermission()
+        if (intent?.getBooleanExtra(EXTRA_START_VOICE, false) == true) startVoice()
+    }
+
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        if (intent?.getBooleanExtra(EXTRA_START_VOICE, false) == true) startVoice()
     }
 
     override fun onStart() {
@@ -110,7 +122,82 @@ class MainActivity : Activity(), RoonClient.Listener, DialView.Callbacks {
 
     override fun onDestroy() {
         super.onDestroy()
+        voiceInput.stop()
         artLoader.shutdownNow()
+    }
+
+    // ----------------------------------------------------------------- voice
+
+    override fun onVoiceTapped() {
+        if (voiceInput.isListening) {
+            voiceInput.stop()
+            setVoice(DialView.Voice.Idle)
+            return
+        }
+        val granted = checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQUEST_MICROPHONE)
+            return
+        }
+        startVoice()
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != REQUEST_MICROPHONE) return
+        if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+            startVoice()
+        } else {
+            say("The microphone is needed to ask for music")
+        }
+    }
+
+    private fun startVoice() {
+        setVoice(DialView.Voice.Listening(""))
+        voiceInput.start(object : VoiceInput.Listener {
+            override fun onListening() = setVoice(DialView.Voice.Listening(""))
+
+            override fun onPartial(text: String) =
+                setVoice(DialView.Voice.Listening(text))
+
+            override fun onHeard(text: String) {
+                // "play Iron Maiden" is what people say; "Iron Maiden" is what
+                // Roon should be asked to find.
+                val query = SpokenQuery.clean(text)
+                if (query.isEmpty()) {
+                    say("Didn't catch that")
+                    return
+                }
+                setVoice(DialView.Voice.Working(query))
+                client.searchAndPlay(query) { result ->
+                    when (result) {
+                        is RoonClient.SearchResult.Playing ->
+                            say("Playing ${result.what}")
+                        is RoonClient.SearchResult.NotFound ->
+                            say(result.reason)
+                    }
+                }
+            }
+
+            override fun onFailed(reason: String) = say(reason)
+        })
+    }
+
+    private fun setVoice(state: DialView.Voice) {
+        voiceHandler.removeCallbacksAndMessages(null)
+        dial.voice = state
+    }
+
+    /** Shows a line on the dial, then hands the dial back to what's playing. */
+    private fun say(message: String) {
+        dial.voice = DialView.Voice.Said(message)
+        voiceHandler.removeCallbacksAndMessages(null)
+        voiceHandler.postDelayed({ dial.voice = DialView.Voice.Idle }, 3500)
     }
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()

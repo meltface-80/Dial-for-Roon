@@ -213,6 +213,7 @@ class WidgetTest {
             .apply(context, FrameLayout(context))
         for (id in listOf(
             R.id.widget_previous, R.id.widget_play_pause, R.id.widget_next,
+            R.id.widget_voice,
             R.id.widget_volume_down, R.id.widget_volume_up,
             R.id.widget_open, R.id.widget_open_centre
         )) {

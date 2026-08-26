@@ -15,7 +15,7 @@ Docker, no Node host, no companion service.
 
 ## Install
 
-### [⬇ Download the APK](https://github.com/meltface-80/Display-extension-apk/raw/main/dist/dial-for-roon-0.8.0.apk)
+### [⬇ Download the APK](https://github.com/meltface-80/Display-extension-apk/raw/main/dist/dial-for-roon-0.9.0.apk)
 
 Android 8.0 (API 26) or newer. Sideload it, then once:
 
@@ -96,7 +96,32 @@ Anything older than 20 seconds is dropped, because a press that fires after
 you've given up is worse than one that never fired. Until then the widget shows
 the last dial it drew, kept on disk for exactly that.
 
-## Voice control
+## Ask for music
+
+Tap the microphone, say "play Iron Maiden", and it plays.
+
+![listening](docs/preview/listening.png)
+
+This deliberately owes nothing to Google Assistant or Gemini. The app runs
+Android's own speech recogniser, cleans up the phrase — people say "play Iron
+Maiden", and searching Roon for the word "play" only makes the results worse —
+and sends the rest to Roon's browse service as a search. Nothing depends on
+which assistant is installed, on winning the media button session, or on
+anything Google is retiring.
+
+Roon's browse API is a hierarchy walk rather than a query language: a search
+returns categories, a category returns matches, and a match returns a list of
+actions, one of which starts playback. Rather than hard-coding the shape of
+that tree — which differs between an artist, an album and a track — the app
+opens the first real result at each level until it reaches a list of actions,
+then picks the one that plays. It prefers "Play Now", and refuses to guess when
+an action list offers nothing that plays, rather than queueing or deleting
+something by accident.
+
+It plays into whichever zone is selected. The widget's microphone opens the app
+already listening, since a widget cannot record audio itself.
+
+## Voice control (the assistant route)
 
 Gemini is a `MediaController`. It doesn't know anything about this app — it
 finds the system's active media session and issues standard Player commands

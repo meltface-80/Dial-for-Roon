@@ -79,12 +79,14 @@ class DialViewTest {
         var previous = 0
         var zoneTaps = 0
         var muteTaps = 0
+        var voiceTaps = 0
         override fun onVolumeSteps(steps: Int) { this.steps += steps }
         override fun onPlayPause() { playPause++ }
         override fun onNext() { next++ }
         override fun onPrevious() { previous++ }
         override fun onZoneTapped() { zoneTaps++ }
         override fun onMuteTapped() { muteTaps++ }
+        override fun onVoiceTapped() { voiceTaps++ }
         override fun onLongPress() { }
     }
 
@@ -124,6 +126,14 @@ class DialViewTest {
             0xFF141A21.toInt(),
             bitmap.getPixel(size / 2, (size / 2 - innerRadius * 0.85f).toInt())
         )
+    }
+
+    @Test
+    fun rendersWhileListening() {
+        val view = makeView()
+        view.setZone(playingZone)
+        view.voice = DialView.Voice.Listening("play iron maiden")
+        render(view, "listening")
     }
 
     @Test
@@ -241,20 +251,27 @@ class DialViewTest {
         val centre = size / 2f
         val radius = centre - 8f
         val innerRadius = radius - radius * 0.115f - 10f * 1f
-        val transportY = centre + innerRadius * 0.60f
+        val transportY = centre + innerRadius * 0.58f
+        val spacing = innerRadius * 0.38f
 
-        send(view, MotionEvent.ACTION_DOWN, centre, transportY)
-        send(view, MotionEvent.ACTION_UP, centre, transportY)
+        fun tap(x: Float) {
+            send(view, MotionEvent.ACTION_DOWN, x, transportY)
+            send(view, MotionEvent.ACTION_UP, x, transportY)
+        }
+
+        tap(centre - spacing * 1.5f)
+        assertEquals(1, recorder.previous)
+
+        tap(centre - spacing * 0.5f)
         assertEquals(1, recorder.playPause)
 
-        val dx = innerRadius * 0.42f
-        send(view, MotionEvent.ACTION_DOWN, centre + dx, transportY)
-        send(view, MotionEvent.ACTION_UP, centre + dx, transportY)
+        tap(centre + spacing * 0.5f)
         assertEquals(1, recorder.next)
 
-        send(view, MotionEvent.ACTION_DOWN, centre - dx, transportY)
-        send(view, MotionEvent.ACTION_UP, centre - dx, transportY)
-        assertEquals(1, recorder.previous)
+        // The microphone: a tap, then speak. The whole point is that it needs
+        // no assistant, so it has to be a control you can actually hit.
+        tap(centre + spacing * 1.5f)
+        assertEquals(1, recorder.voiceTaps)
 
         // Zone name sits in the upper part of the inner circle.
         val zoneY = centre - innerRadius * 0.60f
