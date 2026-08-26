@@ -127,8 +127,12 @@ class RoonWidgetProvider : AppWidgetProvider() {
             val cover = WidgetArtwork.cached(context, snapshot.imageKey)
             val dial = WidgetDial.render(context, zone, statusFor(snapshot), cover)
             if (dial != null) WidgetDial.cache(context, dial)
-            AppWidgetManager.getInstance(context)
-                .updateAppWidget(ids, buildViews(context, dial))
+            val manager = AppWidgetManager.getInstance(context)
+            // Per widget, because each one may be a different size and the tap
+            // targets are placed from that size.
+            for (id in ids) {
+                manager.updateAppWidget(id, buildViews(context, dial, geometryOf(context, id)))
+            }
             ensureArtwork(context, snapshot)
         }
 
@@ -158,17 +162,60 @@ class RoonWidgetProvider : AppWidgetProvider() {
                         context, lastZone, statusFor(snapshot), cover
                     ) ?: return@post
                     WidgetDial.cache(context, dial)
-                    AppWidgetManager.getInstance(context)
-                        .updateAppWidget(ids, buildViews(context, dial))
+                    val manager = AppWidgetManager.getInstance(context)
+                    for (id in ids) {
+                        manager.updateAppWidget(
+                            id, buildViews(context, dial, geometryOf(context, id))
+                        )
+                    }
                 }
             }
         }
 
-        fun buildViews(context: Context, dial: ByteArray?): RemoteViews {
+        /**
+         * The widget's real size, so the tap targets can be laid over the
+         * controls that were actually drawn. Options are reported in dp and
+         * are approximate, which is fine: the targets are far larger than the
+         * error.
+         */
+        fun geometryOf(context: Context, appWidgetId: Int): WidgetGeometry? = try {
+            val options = AppWidgetManager.getInstance(context).getAppWidgetOptions(appWidgetId)
+            val density = context.resources.displayMetrics.density
+            val widthDp = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, 0)
+            val heightDp = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, 0)
+            if (widthDp <= 0 || heightDp <= 0) {
+                null
+            } else {
+                WidgetGeometry(
+                    widthPx = (widthDp * density).toInt(),
+                    heightPx = (heightDp * density).toInt(),
+                    density = density
+                )
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "could not read widget size: " + e.message)
+            null
+        }
+
+        fun buildViews(
+            context: Context,
+            dial: ByteArray?,
+            geometry: WidgetGeometry? = null
+        ): RemoteViews {
             val views = RemoteViews(context.packageName, R.layout.widget_dial)
 
             val image = dial ?: lastRendered(context)
             if (image != null) views.setImageViewIcon(R.id.widget_dial, WidgetDial.icon(image))
+
+            // Inset the controls row onto the drawn controls. Without a known
+            // size the row stays full-width, which is wrong but reachable.
+            if (geometry != null && geometry.isUsable()) {
+                val padding = geometry.controlsPadding()
+                views.setViewPadding(
+                    R.id.widget_controls,
+                    padding.left, padding.top, padding.right, padding.bottom
+                )
+            }
 
             views.setOnClickPendingIntent(R.id.widget_play_pause, broadcast(context, ACTION_PLAY_PAUSE))
             views.setOnClickPendingIntent(R.id.widget_next, broadcast(context, ACTION_NEXT))
@@ -179,7 +226,6 @@ class RoonWidgetProvider : AppWidgetProvider() {
             // already listening rather than pretending to hear from here.
             views.setOnClickPendingIntent(R.id.widget_voice, openApp(context, listening = true))
             views.setOnClickPendingIntent(R.id.widget_open, openApp(context))
-            views.setOnClickPendingIntent(R.id.widget_open_centre, openApp(context))
 
             return views
         }
@@ -215,6 +261,7 @@ class RoonWidgetProvider : AppWidgetProvider() {
     ) {
         val snapshot = lastPublished ?: WidgetSnapshot.load(context)
         val zone = lastZone
+        @Suppress("UNUSED_EXPRESSION")
         val dial = if (zone != null) {
             WidgetDial.render(
                 context, zone, statusFor(snapshot),
@@ -225,7 +272,11 @@ class RoonWidgetProvider : AppWidgetProvider() {
             lastRendered(context)
                 ?: WidgetDial.render(context, null, statusFor(snapshot), null)
         }
-        appWidgetManager.updateAppWidget(appWidgetIds, buildViews(context, dial))
+        for (id in appWidgetIds) {
+            appWidgetManager.updateAppWidget(
+                id, buildViews(context, dial, geometryOf(context, id))
+            )
+        }
         ensureArtwork(context, snapshot)
     }
 
@@ -290,6 +341,19 @@ class RoonWidgetProvider : AppWidgetProvider() {
         }
 
         main.postDelayed(finish, WAKE_BUDGET_MS)
+    }
+
+    override fun onAppWidgetOptionsChanged(
+        context: Context,
+        appWidgetManager: AppWidgetManager,
+        appWidgetId: Int,
+        newOptions: android.os.Bundle?
+    ) {
+        // Resized: the controls moved, so the tap targets have to move too.
+        appWidgetManager.updateAppWidget(
+            appWidgetId,
+            buildViews(context, lastRendered(context), geometryOf(context, appWidgetId))
+        )
     }
 
     override fun onDisabled(context: Context) {

@@ -43,6 +43,41 @@ object BrowsePlan {
         "start radio"
     )
 
+    /** What a browse response means for a walk in progress. */
+    sealed class Outcome {
+        /** Load this level and keep looking. */
+        object KeepWalking : Outcome()
+        object Playing : Outcome()
+        data class Stop(val message: String) : Outcome()
+    }
+
+    /**
+     * Reads a browse response.
+     *
+     * [played] means the previous request was the play action. Once it has
+     * been sent the walk is over whatever comes back: Roon does not always
+     * answer "none", and may hand back the level it popped to. Treating that
+     * as "keep looking" reported failure over music that was already playing,
+     * and sent a second play action — which made playback jump.
+     */
+    fun afterBrowse(
+        played: Boolean,
+        action: String,
+        isError: Boolean,
+        message: String?
+    ): Outcome = when {
+        played && isError -> Stop(message)
+        played -> Outcome.Playing
+        action == "list" -> Outcome.KeepWalking
+        action == "message" -> Stop(message)
+        // "none" without having asked for anything to play means Roon had
+        // nothing more to offer.
+        else -> Outcome.Playing
+    }
+
+    private fun Stop(message: String?) =
+        Outcome.Stop(message?.takeIf { it.isNotBlank() } ?: "Roon had nothing for that")
+
     sealed class Step {
         /** Open this item and look again. */
         data class Descend(val itemKey: String, val title: String) : Step()
