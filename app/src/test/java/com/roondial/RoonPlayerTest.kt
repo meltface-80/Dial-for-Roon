@@ -124,13 +124,27 @@ class RoonPlayerTest {
     }
 
     @Test
-    fun skipIsUnavailableWhenRoonForbidsIt() {
+    fun skipStaysOfferedEvenWhenRoonSaysNo() {
+        // media3 derives the platform PlaybackState actions from the player's
+        // commands, so withdrawing these strips ACTION_SKIP_TO_NEXT/PREVIOUS
+        // from what an assistant sees and makes the session look half-dead.
+        // Roon is the right place to refuse a skip it cannot do.
         useZone(zone(next = false, previous = false))
-        assertFalse(player.isCommandAvailable(Player.COMMAND_SEEK_TO_NEXT))
-        assertFalse(player.isCommandAvailable(Player.COMMAND_SEEK_TO_PREVIOUS))
+
+        assertTrue(player.isCommandAvailable(Player.COMMAND_SEEK_TO_NEXT))
+        assertTrue(player.isCommandAvailable(Player.COMMAND_SEEK_TO_PREVIOUS))
+
         player.seekToNext()
         player.seekToPrevious()
-        assertTrue("no transport command should have been sent", roon.commands.isEmpty())
+        assertEquals(listOf("next", "previous"), roon.commands)
+    }
+
+    @Test
+    fun prepareIsOffered() {
+        // ACTION_PREPARE, which the assistant documentation lists as expected
+        // before it will send a play command.
+        useZone(zone())
+        assertTrue(player.isCommandAvailable(Player.COMMAND_PREPARE))
     }
 
     @Test

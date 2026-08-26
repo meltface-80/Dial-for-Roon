@@ -27,12 +27,12 @@ class RoonPlaybackService : MediaSessionService(), RoonClient.Listener {
 
     private var session: MediaSession? = null
     private var player: RoonPlayer? = null
-    private var audioFocus: AudioFocusHolder? = null
+    private var claim: MediaControlClaim? = null
     private lateinit var client: RoonClient
 
     companion object {
         private const val PREFS = "roon_dial"
-        const val KEY_TAKE_AUDIO_FOCUS = "take_audio_focus"
+        const val KEY_CLAIM_MEDIA_CONTROL = "claim_media_control"
 
         /** Read by the in-app diagnostic; written only on the main thread. */
         @Volatile
@@ -44,20 +44,25 @@ class RoonPlaybackService : MediaSessionService(), RoonClient.Listener {
             private set
 
         @Volatile
-        var holdsAudioFocus: Boolean = false
+        var claimsMediaControl: Boolean = false
             private set
 
         @Volatile
         var activePlayer: RoonPlayer? = null
             private set
 
-        fun takesAudioFocus(context: Context): Boolean =
+        /**
+         * Off by default: it renders silent audio, which costs a little power
+         * and takes the media button session from an app genuinely playing on
+         * the phone. See MediaControlClaim.
+         */
+        fun claimsMediaControlEnabled(context: Context): Boolean =
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .getBoolean(KEY_TAKE_AUDIO_FOCUS, true)
+                .getBoolean(KEY_CLAIM_MEDIA_CONTROL, false)
 
-        fun setTakesAudioFocus(context: Context, enabled: Boolean) {
+        fun setClaimsMediaControl(context: Context, enabled: Boolean) {
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-                .putBoolean(KEY_TAKE_AUDIO_FOCUS, enabled).apply()
+                .putBoolean(KEY_CLAIM_MEDIA_CONTROL, enabled).apply()
         }
     }
 
@@ -69,9 +74,20 @@ class RoonPlaybackService : MediaSessionService(), RoonClient.Listener {
         player = roonPlayer
         session = MediaSession.Builder(this, roonPlayer)
             .setId("roon-dial")
+            .setCallback(SessionCallback())
+            .setSessionActivity(
+                android.app.PendingIntent.getActivity(
+                    this,
+                    0,
+                    packageManager.getLaunchIntentForPackage(packageName)
+                        ?: android.content.Intent(),
+                    android.app.PendingIntent.FLAG_UPDATE_CURRENT or
+                        android.app.PendingIntent.FLAG_IMMUTABLE
+                )
+            )
             .build()
 
-        audioFocus = AudioFocusHolder(this)
+        claim = MediaControlClaim(this)
         isRunning = true
         sessionPublished = session != null
         activePlayer = roonPlayer
@@ -82,6 +98,29 @@ class RoonPlaybackService : MediaSessionService(), RoonClient.Listener {
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = session
 
+    /**
+     * media3 requires this once a MediaButtonReceiver is declared: without it
+     * a PLAY key that cold-starts the service resolves to a failure. There is
+     * no queue to restore — Roon owns that — so this hands back the zone as it
+     * stands and lets play do the rest.
+     */
+    private inner class SessionCallback : MediaSession.Callback {
+        override fun onPlaybackResumption(
+            mediaSession: MediaSession,
+            controller: MediaSession.ControllerInfo
+        ): com.google.common.util.concurrent.ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
+            val player = player
+            val items = if (player != null && player.mediaItemCount > 0) {
+                (0 until player.mediaItemCount).map { player.getMediaItemAt(it) }
+            } else {
+                emptyList()
+            }
+            return com.google.common.util.concurrent.Futures.immediateFuture(
+                MediaSession.MediaItemsWithStartPosition(items, 0, 0L)
+            )
+        }
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
         // Survive being restarted by the system with a null intent.
@@ -91,22 +130,22 @@ class RoonPlaybackService : MediaSessionService(), RoonClient.Listener {
     override fun onTaskRemoved(rootIntent: Intent?) {
         // Swiping the app away while the zone is paused should let go; while
         // it is playing the session stays so the notification keeps working.
-        // A placed widget wants live state, so the connection outlives the
-        // task being swiped away; without one there is nothing left to serve.
+        // A placed widget wants live state, and any selected zone means there
+        // is still something for a voice command or a headset button to reach.
+        // Tearing the session down here is how the app ends up with nothing
+        // for an assistant to talk to.
         if (RoonWidgetProvider.hasWidgets(this)) return
-        val zone = client.selectedZone()
-        if (zone == null || !zone.isPlaying) {
-            stopSelf()
-        }
+        if (client.selectedZone() != null) return
+        stopSelf()
     }
 
     override fun onDestroy() {
         isRunning = false
         sessionPublished = false
         activePlayer = null
-        holdsAudioFocus = false
-        audioFocus?.hold(false)
-        audioFocus = null
+        claimsMediaControl = false
+        claim?.claim(false)
+        claim = null
         client.removeListener(this)
         client.stop()
         session?.run {
@@ -128,9 +167,9 @@ class RoonPlaybackService : MediaSessionService(), RoonClient.Listener {
         RoonWidgetProvider.publish(this, selected)
 
         val playing = selected?.isPlaying == true
-        audioFocus?.let { focus ->
-            focus.hold(playing && takesAudioFocus(this))
-            holdsAudioFocus = focus.isHeld
+        claim?.let { mediaControl ->
+            mediaControl.claim(playing && claimsMediaControlEnabled(this))
+            claimsMediaControl = mediaControl.isClaimed
         }
     }
 }

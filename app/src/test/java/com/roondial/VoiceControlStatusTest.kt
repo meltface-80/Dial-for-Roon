@@ -13,15 +13,15 @@ class VoiceControlStatusTest {
         zoneName: String? = "Living Room",
         canPlayPause: Boolean = true,
         isPlaying: Boolean = true,
-        holdsAudioFocus: Boolean = true,
-        takesAudioFocus: Boolean = true
+        claimsMediaControl: Boolean = true,
+        claimEnabled: Boolean = true
     ) = VoiceControlStatus.Report(
         serviceRunning = serviceRunning,
         sessionPublished = sessionPublished,
         notificationsAllowed = true,
         mediaNotificationPosted = true,
-        holdsAudioFocus = holdsAudioFocus,
-        takesAudioFocus = takesAudioFocus,
+        claimsMediaControl = claimsMediaControl,
+        claimEnabled = claimEnabled,
         zoneName = zoneName,
         isPlaying = isPlaying,
         canPlayPause = canPlayPause,
@@ -53,15 +53,23 @@ class VoiceControlStatusTest {
     }
 
     @Test
-    fun refusedAudioFocusIsCalledOut() {
-        val text = report(holdsAudioFocus = false).asText()
-        assertTrue(text.contains("Audio focus was refused"))
+    fun explainsWhyVoiceCannotReachTheAppWhenNotClaiming() {
+        // The one thing that actually decides whether spoken transport reaches
+        // this app, so the report has to say it rather than leave the user
+        // guessing at notifications and audio focus.
+        val text = report(claimEnabled = false).asText()
+        assertTrue(text.contains("media button session"))
+        assertTrue(text.contains("Claim media control"))
     }
 
     @Test
-    fun refusedFocusIsNotMentionedWhenNotAskingForIt() {
-        val text = report(holdsAudioFocus = false, takesAudioFocus = false).asText()
-        assertFalse(text.contains("Audio focus was refused"))
+    fun doesNotNagAboutClaimingWhenAlreadyOn() {
+        assertFalse(report(claimEnabled = true).asText().contains("Claim media control"))
+    }
+
+    @Test
+    fun alwaysPointsAtGeminisConnectedApp() {
+        assertTrue(report().asText().contains("Device assistance"))
     }
 
     @Test
@@ -71,7 +79,7 @@ class VoiceControlStatusTest {
             "Media session running", "Zone", "Playing",
             "Session offers play/pause", "Session offers next/previous",
             "Session offers volume", "Notifications allowed",
-            "Media notification showing", "Holds audio focus now"
+            "Media notification showing", "Claiming right now"
         )) {
             assertTrue("missing '$label'", text.contains(label))
         }

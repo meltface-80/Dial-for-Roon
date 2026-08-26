@@ -26,8 +26,8 @@ object VoiceControlStatus {
         val sessionPublished: Boolean,
         val notificationsAllowed: Boolean,
         val mediaNotificationPosted: Boolean,
-        val holdsAudioFocus: Boolean,
-        val takesAudioFocus: Boolean,
+        val claimsMediaControl: Boolean,
+        val claimEnabled: Boolean,
         val zoneName: String?,
         val isPlaying: Boolean,
         val canPlayPause: Boolean,
@@ -53,14 +53,20 @@ object VoiceControlStatus {
                 append("  (media notifications are exempt, so this is not the blocker)\n")
             }
             line("Media notification showing", mediaNotificationPosted)
-            line("Takes audio focus", takesAudioFocus)
-            line("Holds audio focus now", holdsAudioFocus)
+            line("Claims media control", claimEnabled)
+            line("Claiming right now", claimsMediaControl)
             if (!looksHealthy) {
                 append("\nThe session is not reachable. Play something in Roon ")
                 append("with this app open, then check again.")
-            } else if (!holdsAudioFocus && takesAudioFocus && isPlaying) {
-                append("\nAudio focus was refused. Another app is probably holding it.")
+            } else if (!claimEnabled) {
+                append("\nSpoken transport commands go to the app Android calls the ")
+                append("media button session, and it only ever picks apps that have ")
+                append("played audio on the phone. This app plays none, so it is ")
+                append("never chosen. Turn on \u201cClaim media control\u201d in the ")
+                append("menu to make it eligible.")
             }
+            append("\nIf a command is heard but ignored, also check Gemini \u2192 ")
+            append("Settings \u2192 Connected apps \u2192 Device assistance.")
         }
 
         private fun StringBuilder.line(label: String, value: Any) {
@@ -86,8 +92,8 @@ object VoiceControlStatus {
             sessionPublished = RoonPlaybackService.sessionPublished,
             notificationsAllowed = notificationsAllowed(context),
             mediaNotificationPosted = mediaNotificationPosted(context),
-            holdsAudioFocus = RoonPlaybackService.holdsAudioFocus,
-            takesAudioFocus = RoonPlaybackService.takesAudioFocus(context),
+            claimsMediaControl = RoonPlaybackService.claimsMediaControl,
+            claimEnabled = RoonPlaybackService.claimsMediaControlEnabled(context),
             zoneName = zone?.displayName,
             isPlaying = zone?.isPlaying == true,
             canPlayPause = player?.isCommandAvailable(Player.COMMAND_PLAY_PAUSE) == true,

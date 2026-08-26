@@ -15,7 +15,7 @@ Docker, no Node host, no companion service.
 
 ## Install
 
-### [⬇ Download the APK](https://github.com/meltface-80/Display-extension-apk/raw/main/dist/dial-for-roon-0.7.0.apk)
+### [⬇ Download the APK](https://github.com/meltface-80/Display-extension-apk/raw/main/dist/dial-for-roon-0.8.0.apk)
 
 Android 8.0 (API 26) or newer. Sideload it, then once:
 
@@ -134,11 +134,25 @@ Voice control fails silently by nature — the assistant hears the words, finds
 no session it wants, and says nothing useful — so the point is to place the
 failure rather than guess at it.
 
-The menu also has **audio focus**, on by default. Nothing plays on the phone, so
-without it this app has never taken focus, which makes it a weak candidate when
-the system decides which app "the media" refers to. Taking focus says the music
-being talked about is the music this app is in charge of. The cost is that it
-pauses audio in other apps on the phone, so it can be turned off.
+### Why spoken transport is hard here, exactly
+
+Android awards the *media button session* — the one an assistant drives — in
+`MediaSessionStack.updateMediaButtonSessionIfNeeded`, which walks a single
+list: the UIDs that have recently **rendered audio**, most recent first. An app
+that has never played a sample is never a candidate, however correct its media
+session is. Audio focus is not consulted anywhere in that path; the word does
+not appear in the file.
+
+This app plays nothing — the music is on the hi-fi — so it is categorically
+excluded. The menu's **Claim media control** makes it eligible the only way
+available: while the zone plays it renders a looping buffer of silence, which
+registers this UID as having played audio. It is off by default because the
+cost is real — a little battery, and while it runs this app takes the media
+button session from an app genuinely playing on the phone.
+
+Remote volume is different and works without any of that: the volume-key path
+checks only that the session is playing and can handle volume keys, with no
+local-audio requirement.
 
 Two caveats worth knowing:
 

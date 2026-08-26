@@ -99,11 +99,15 @@ class RoonPlayer(
         // Roon owns the queue, so the playlist is synthetic: neighbours exist
         // only when Roon says skipping that way is allowed, which makes the
         // notification's buttons match the zone.
+        // Neighbours always exist. A player with nothing either side reports
+        // that it cannot skip, and BasePlayer then swallows the call before it
+        // reaches Roon — so gating these on Roon's flags silently disarmed the
+        // command instead of letting Roon answer for itself.
         val playlist = ArrayList<MediaItemData>(3)
-        if (z.isPreviousAllowed) playlist += placeholder(UID_PREVIOUS)
+        playlist += placeholder(UID_PREVIOUS)
         val currentIndex = playlist.size
         playlist += currentItem(z, np.line1, np.line2, np.line3, np.lengthSeconds, np.imageKey)
-        if (z.isNextAllowed) playlist += placeholder(UID_NEXT)
+        playlist += placeholder(UID_NEXT)
 
         val positionMs = (np.seekPosition ?: 0).toLong() * 1000L
         builder
@@ -139,14 +143,17 @@ class RoonPlayer(
         // asking it to start something.
         commands.add(Player.COMMAND_PLAY_PAUSE)
         commands.add(Player.COMMAND_STOP)
-        if (z.isNextAllowed) {
-            commands.add(Player.COMMAND_SEEK_TO_NEXT)
-            commands.add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
-        }
-        if (z.isPreviousAllowed) {
-            commands.add(Player.COMMAND_SEEK_TO_PREVIOUS)
-            commands.add(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
-        }
+        // COMMAND_PREPARE is what becomes ACTION_PREPARE, which the assistant
+        // documentation lists as required before it will send a play command.
+        commands.add(Player.COMMAND_PREPARE)
+        // Offered unconditionally for the same reason as play/pause: media3
+        // derives the platform PlaybackState actions from these commands, so
+        // withdrawing them strips ACTION_SKIP_TO_NEXT/PREVIOUS from what an
+        // assistant sees. Let Roon reject a skip it cannot do.
+        commands.add(Player.COMMAND_SEEK_TO_NEXT)
+        commands.add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+        commands.add(Player.COMMAND_SEEK_TO_PREVIOUS)
+        commands.add(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
         if (z.isSeekAllowed) commands.add(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM)
 
         if (z.hasVolumeControl) {
