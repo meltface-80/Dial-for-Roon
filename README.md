@@ -15,7 +15,7 @@ Docker, no Node host, no companion service.
 
 ## Install
 
-### [⬇ Download the APK](https://github.com/meltface-80/Display-extension-apk/raw/main/dist/dial-for-roon-0.6.0.apk)
+### [⬇ Download the APK](https://github.com/meltface-80/Display-extension-apk/raw/main/dist/dial-for-roon-0.7.0.apk)
 
 Android 8.0 (API 26) or newer. Sideload it, then once:
 
@@ -112,6 +112,20 @@ those commands to the Roon zone.
 
 The same session drives the notification, the lock screen, headset and car
 buttons, and Wear.
+
+A zone with nothing playing still reports itself as a live, controllable
+session rather than as idle. media3 reads idle as nothing to show — it takes
+the notification away and stops counting the session as engaged — so an
+assistant asked to play would find an empty timeline and no play command. A
+zone Roon has stopped rather than paused lands in exactly that state, which is
+precisely when "play" needs to work.
+
+Two facts worth knowing, both established by reading media3's source rather
+than by guessing. Media-session notifications are exempt from the
+POST_NOTIFICATIONS permission, so denying notifications is never the reason
+voice control fails. And the media service stays in the foreground for at most
+ten minutes after playback pauses — that ceiling is fixed and cannot be raised
+— after which the session survives only as long as the process does.
 
 If a command is recognised but nothing happens, the app's long-press menu has
 **Voice control status**, which reports each link in the chain separately: the

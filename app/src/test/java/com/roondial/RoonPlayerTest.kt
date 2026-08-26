@@ -239,8 +239,25 @@ class RoonPlayerTest {
     }
 
     @Test
-    fun zoneWithoutNowPlayingIsIdle() {
+    fun aZoneWithNothingPlayingIsStillControllable() {
+        // Reporting STATE_IDLE here took the notification away and stopped the
+        // session counting as engaged, so an assistant asked to play found an
+        // empty timeline and no play command. A zone Roon has stopped rather
+        // than paused lands here — exactly when "play" has to work.
         useZone(zone(nowPlaying = false))
-        assertEquals(Player.STATE_IDLE, player.playbackState)
+
+        assertEquals(Player.STATE_READY, player.playbackState)
+        assertFalse(player.playWhenReady)
+        assertTrue(player.isCommandAvailable(Player.COMMAND_PLAY_PAUSE))
+        assertTrue("timeline must not be empty", player.currentTimeline.windowCount > 0)
+
+        player.play()
+        assertEquals(listOf("play"), roon.commands)
+    }
+
+    @Test
+    fun theZoneIsNamedWhileNothingPlays() {
+        useZone(zone(nowPlaying = false))
+        assertEquals("Living Room", player.mediaMetadata.title)
     }
 }
