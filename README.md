@@ -15,7 +15,7 @@ Docker, no Node host, no companion service.
 
 ## Install
 
-### [⬇ Download the APK](https://github.com/meltface-80/Display-extension-apk/raw/main/dist/dial-for-roon-0.10.0.apk)
+### [⬇ Download the APK](https://github.com/meltface-80/Display-extension-apk/raw/main/dist/dial-for-roon-0.11.0.apk)
 
 Android 8.0 (API 26) or newer. Sideload it, then once:
 
@@ -117,9 +117,27 @@ returns categories, a category returns matches, and a match returns a list of
 actions, one of which starts playback. Rather than hard-coding the shape of
 that tree — which differs between an artist, an album and a track — the app
 opens the first real result at each level until it reaches a list of actions,
-then picks the one that plays. It prefers "Play Now", and refuses to guess when
-an action list offers nothing that plays, rather than queueing or deleting
-something by accident.
+then picks the one that plays.
+
+Four things about that walk are worth knowing, because each one is a way it
+used to get this wrong:
+
+- **It reads the whole level, not the first page.** A level whose opening rows
+  are all headers, or whose matches start past row fifty, used to come back
+  "nothing to play" over a library that had it.
+- **It knows what an action does, not how it is spelled.** Actions are
+  classified — play now, play next, queue, shuffle, radio — so "Play Next"
+  can never be mistaken for a play just because it starts with the word.
+  When a menu offers nothing that plays, it says so rather than queueing or
+  deleting something by accident.
+- **It asks the zone whether the music started.** Roon accepting the play
+  action is not the same as a room making noise, so the app waits for the zone
+  to report it and then tells you what actually started — "Playing The Trooper
+  — Iron Maiden", not an echo of what you said.
+- **It gives its browse session back.** Roon holds server-side state for every
+  session key it is shown, for as long as the extension stays connected. Keys
+  are pooled, so a Core that has answered two hundred voice commands is holding
+  one browse session, not two hundred.
 
 It plays into whichever zone is selected. The widget's microphone opens the app
 already listening, since a widget cannot record audio itself.
@@ -256,7 +274,7 @@ Needs JDK 17+, Android SDK platform 36 and build-tools 36.0.0. Output lands in
 
 ## Verification
 
-`./gradlew :app:testReleaseUnitTest` — 65 tests:
+`./gradlew :app:testReleaseUnitTest` — 149 tests:
 
 - **Wire format.** Frames produced by the Kotlin encoder are parsed back by
   `node-roon-api`'s own `moo.js`, and the SOOD query by the parser lifted from
@@ -274,6 +292,16 @@ Needs JDK 17+, Android SDK platform 36 and build-tools 36.0.0. Output lands in
   connects to the published session and drives it: pause, next, previous,
   volume up/down and mute all arrive at the Roon client as the right commands,
   and the session advertises exactly the commands the zone allows.
+- **The search walk.** Every decision it makes is a pure function over a
+  browse level, so the awkward cases are tested without a Core: paging on
+  when a page held nothing usable, stopping at the level's end, never taking
+  "Play Next" for a play, and refusing a page that repeats one already held —
+  which is what stops a Core that ignores the offset from being asked for the
+  same rows for ever.
+- **JSON nulls.** Android's `optString` returns the *string* `"null"` for a
+  JSON null where every JVM implementation returns `""`, so no unit test run
+  on a desktop JVM can reproduce what the phone does. A test scans the source
+  instead and fails if `optString` reappears outside the safe accessors.
 - **The widget.** The dial is rendered and decoded back: it comes out at the
   right size, its corners stay transparent so the widget keeps its rounded
   edges, every control has a tap target, and the image travels as compressed
