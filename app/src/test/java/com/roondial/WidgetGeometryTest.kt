@@ -18,20 +18,29 @@ class WidgetGeometryTest {
 
     private val density = 3f
 
-    /** DialView's control positions, derived from its own constants. */
+    /**
+     * DialView's control positions, derived independently.
+     *
+     * The dial is laid out in the bitmap's own square — a fixed 512px — and
+     * that bitmap is then scaled to fit the widget. So the dp insets apply at
+     * bitmap scale, and positions have to be worked out there and mapped in.
+     * Applying them at widget scale made the cells up to 30% too wide.
+     */
     private fun drawnControlCentres(width: Int, height: Int): List<Float> {
-        val side = min(width, height).toFloat()
-        val radius = side / 2f - 8f * density
+        val bitmap = com.roondial.widget.WidgetDial.SIZE.toFloat()
+        val radius = bitmap / 2f - 8f * density
         val ringWidth = radius * 0.115f
         val innerRadius = radius - ringWidth - 10f * density
-        val cx = width / 2f
         val spacing = innerRadius * 0.38f
-        return listOf(
-            cx - spacing * 1.5f,
-            cx - spacing * 0.5f,
-            cx + spacing * 0.5f,
-            cx + spacing * 1.5f
+        val inBitmap = listOf(
+            bitmap / 2f - spacing * 1.5f,
+            bitmap / 2f - spacing * 0.5f,
+            bitmap / 2f + spacing * 0.5f,
+            bitmap / 2f + spacing * 1.5f
         )
+        val side = min(width, height).toFloat()
+        val left = (width - side) / 2f
+        return inBitmap.map { left + it / bitmap * side }
     }
 
     /** Centres of the four weighted cells inside the padded row. */
@@ -62,10 +71,10 @@ class WidgetGeometryTest {
         val geometry = WidgetGeometry(900, height, density)
         val padding = geometry.controlsPadding()
 
-        val side = 900f
-        val radius = side / 2f - 8f * density
+        val bitmap = com.roondial.widget.WidgetDial.SIZE.toFloat()
+        val radius = bitmap / 2f - 8f * density
         val innerRadius = radius - radius * 0.115f - 10f * density
-        val controlsY = height / 2f + innerRadius * 0.58f
+        val controlsY = height / 2f + innerRadius * 0.58f * (900f / bitmap)
 
         assertTrue("row starts above the controls", padding.top < controlsY)
         assertTrue("row ends below the controls", height - padding.bottom > controlsY)

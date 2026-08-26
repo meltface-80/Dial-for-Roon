@@ -17,6 +17,7 @@ import okio.ByteString.Companion.toByteString
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
+import kotlin.math.roundToInt
 
 /**
  * Speaks the Roon extension protocol directly: SOOD to find the Core, then a
@@ -42,6 +43,9 @@ class RoonClient(context: Context) : ZoneControl {
         const val SERVICE_TRANSPORT = "com.roonlabs.transport:2"
         const val SERVICE_IMAGE = "com.roonlabs.image:1"
         const val SERVICE_BROWSE = "com.roonlabs.browse:1"
+
+        /** The browse hierarchy a spoken request walks. */
+        private const val HIERARCHY = "search"
         const val SERVICE_PING = "com.roonlabs.ping:1"
         const val SERVICE_REGISTRY = "com.roonlabs.registry:1"
 
@@ -65,7 +69,10 @@ class RoonClient(context: Context) : ZoneControl {
      * requests, because when the press arrives there may be no zone yet — and
      * "volume up" means a different number of steps on different outputs.
      */
-    enum class Action { PLAY_PAUSE, NEXT, PREVIOUS, VOLUME_UP, VOLUME_DOWN, TOGGLE_MUTE }
+    enum class Action {
+        PLAY_PAUSE, PLAY, PAUSE, NEXT, PREVIOUS,
+        VOLUME_UP, VOLUME_DOWN, TOGGLE_MUTE, MUTE, UNMUTE
+    }
 
     data class Status(val stage: Stage, val coreName: String? = null, val detail: String? = null)
 
@@ -162,6 +169,9 @@ class RoonClient(context: Context) : ZoneControl {
 
     private fun markDisconnected() {
         connected = false
+        // Session keys mean nothing to a Core that has not seen them, and a
+        // walk cut off mid-flight never gives its own key back.
+        browseSessions.reset()
         zoneStore.clear()
         selectedSnapshot = null
         zonesSnapshot = emptyList()
@@ -311,8 +321,8 @@ class RoonClient(context: Context) : ZoneControl {
         backoffMs = 1000L
         sendRequest(SERVICE_REGISTRY, "info") { msg ->
             val body = msg.bodyText?.let { JSONObject(it) }
-            coreId = body?.optString("core_id")?.takeIf { it.isNotEmpty() }
-            coreName = body?.optString("display_name")?.takeIf { it.isNotEmpty() } ?: coreName
+            coreId = body?.str("core_id")?.takeIf { it.isNotEmpty() }
+            coreName = body?.str("display_name")?.takeIf { it.isNotEmpty() } ?: coreName
             register()
         }
     }
@@ -340,10 +350,10 @@ class RoonClient(context: Context) : ZoneControl {
         sendRequest(SERVICE_REGISTRY, "register", reginfo) { msg ->
             if (msg.name == "Registered") {
                 val body = msg.bodyText?.let { JSONObject(it) }
-                val id = body?.optString("core_id")?.takeIf { it.isNotEmpty() } ?: coreId
+                val id = body?.str("core_id")?.takeIf { it.isNotEmpty() } ?: coreId
                 coreId = id
-                coreName = body?.optString("display_name")?.takeIf { it.isNotEmpty() } ?: coreName
-                body?.optString("token")?.takeIf { it.isNotEmpty() }?.let { saveToken(id, it) }
+                coreName = body?.str("display_name")?.takeIf { it.isNotEmpty() } ?: coreName
+                body?.str("token")?.takeIf { it.isNotEmpty() }?.let { saveToken(id, it) }
                 status = Status(Stage.CONNECTED, coreName, "Paired with ${coreName ?: "Roon"}")
                 subscribeZones()
             } else {
@@ -422,12 +432,47 @@ class RoonClient(context: Context) : ZoneControl {
             // which is the state a zone drifts into when left paused, whereas
             // play resumes it.
             Action.PLAY_PAUSE -> control(playPauseControl(zone))
+            Action.PLAY -> control("play")
+            Action.PAUSE -> control("pause")
+            Action.MUTE -> setMuted(true)
+            Action.UNMUTE -> setMuted(false)
             Action.NEXT -> control("next")
             Action.PREVIOUS -> control("previous")
             Action.VOLUME_UP -> changeVolumeSteps(nudgeSteps(zone))
             Action.VOLUME_DOWN -> changeVolumeSteps(-nudgeSteps(zone))
             Action.TOGGLE_MUTE -> toggleMute()
         }
+    }
+
+    /** Sets the volume to a percentage of the output's usable range. */
+    fun setVolumePercent(percent: Int) {
+        val zone = selectedZone() ?: return
+        net.post {
+            for (out in zone.volumeOutputs) {
+                val vol = out.volume ?: continue
+                if (vol.isIncremental) continue
+                val span = vol.effectiveMax - vol.min
+                if (span <= 0.0) continue
+                val target = vol.min + span * (percent.coerceIn(0, 100) / 100.0)
+                sendRequest(
+                    SERVICE_TRANSPORT, "change_volume",
+                    JSONObject()
+                        .put("output_id", out.outputId)
+                        .put("how", "absolute")
+                        .put("value", target)
+                )
+            }
+        }
+    }
+
+    /**
+     * Moves the volume by [multiplier] of a normal nudge. Spoken requests
+     * carry a size — "turn it up a bit" against "turn it up a lot".
+     */
+    fun nudgeVolume(direction: Int, multiplier: Float) {
+        val zone = selectedZone() ?: return
+        val steps = (nudgeSteps(zone) * multiplier).roundToInt().coerceAtLeast(1)
+        changeVolumeSteps(if (direction < 0) -steps else steps)
     }
 
     /**
@@ -533,6 +578,16 @@ class RoonClient(context: Context) : ZoneControl {
     /** How far to walk before deciding Roon is not going to offer a play action. */
     private val maxBrowseDepth = 6
 
+    /**
+     * How long to give the zone to actually start after Roon accepts the play
+     * action. A Core on the same network reports the change in well under a
+     * second; this is generous so that a slow one is not called a failure.
+     */
+    private val playConfirmMs = 2_500L
+    private val playPollMs = 300L
+
+    private val browseSessions = BrowseSessionPool()
+
     sealed class SearchResult {
         data class Playing(val what: String) : SearchResult()
         data class NotFound(val reason: String) : SearchResult()
@@ -557,118 +612,209 @@ class RoonClient(context: Context) : ZoneControl {
             main.post { onResult(SearchResult.NotFound("Nothing heard")) }
             return
         }
-
-        net.post {
-            val body = JSONObject()
-                .put("hierarchy", "search")
-                .put("input", trimmed)
-                .put("pop_all", true)
-                .put("zone_or_output_id", zone.zoneId)
-            sendRequest(SERVICE_BROWSE, "browse", body) { msg ->
-                handleBrowse(msg, zone.zoneId, trimmed, 0, played = false, onResult = onResult)
-            }
-        }
+        net.post { SearchWalk(zone.zoneId, trimmed, onResult).start() }
     }
 
-    private fun finish(onResult: (SearchResult) -> Unit, result: SearchResult) {
-        main.post { onResult(result) }
-    }
-
-    private fun handleBrowse(
-        msg: Moo.Message,
-        zoneId: String,
-        query: String,
-        depth: Int,
-        played: Boolean,
-        onResult: (SearchResult) -> Unit
+    /**
+     * One search, from the spoken words to music playing.
+     *
+     * A walk owns a browse session key for its whole life and gives it back
+     * exactly once, on whichever path ends it — including the ones that end
+     * because the socket went away mid-walk. It runs entirely on [net], so its
+     * mutable state needs no lock, but for the same reason it must never block
+     * that thread: waiting for the zone to start playing is a chain of delayed
+     * posts, not a wait().
+     */
+    private inner class SearchWalk(
+        private val zoneId: String,
+        private val query: String,
+        private val onResult: (SearchResult) -> Unit
     ) {
-        val body = msg.bodyText?.let { JSONObject(it) }
-        if (msg.name != "Success" || body == null) {
-            finish(onResult, SearchResult.NotFound("Roon refused the search"))
-            return
+        private val session = browseSessions.acquire()
+        private var finished = false
+
+        /** The level being read: reset on every descent. */
+        private var depth = 0
+        private var listHint: String? = null
+        private var items = ArrayList<BrowseItem>()
+        private var total = 0
+
+        /** What the label of this walk is: the query, or the row it descended into. */
+        private var label = query
+
+        /** What the zone was doing before the play action was sent. */
+        private var wasPlaying = false
+        private var previousTrack = ""
+
+        fun start() {
+            // pop_all discards whatever the previous walk left on this key,
+            // which is what makes reusing keys safe.
+            browse(
+                JSONObject()
+                    .put("hierarchy", HIERARCHY)
+                    .put("multi_session_key", session)
+                    .put("input", query)
+                    .put("pop_all", true)
+                    .put("zone_or_output_id", zoneId),
+                played = false
+            )
         }
 
-        val outcome = BrowsePlan.afterBrowse(
-            played = played,
-            action = body.optString("action"),
-            isError = body.optBoolean("is_error", false),
-            message = body.optString("message")
-        )
-        when (outcome) {
-            is BrowsePlan.Outcome.Playing -> {
-                finish(onResult, SearchResult.Playing(query)); return
+        private fun finish(result: SearchResult) {
+            if (finished) return
+            finished = true
+            browseSessions.release(session)
+            main.post { onResult(result) }
+        }
+
+        private fun browse(body: JSONObject, played: Boolean) {
+            if (socket == null) {
+                finish(SearchResult.NotFound("Lost the connection to Roon"))
+                return
             }
-            is BrowsePlan.Outcome.Stop -> {
-                finish(onResult, SearchResult.NotFound(outcome.message)); return
+            sendRequest(SERVICE_BROWSE, "browse", body) { onBrowse(it, played) }
+        }
+
+        private fun onBrowse(msg: Moo.Message, played: Boolean) {
+            if (finished) return
+            val body = msg.bodyText?.let { JSONObject(it) }
+            if (msg.name != "Success" || body == null) {
+                finish(SearchResult.NotFound("Roon refused the search"))
+                return
             }
-            is BrowsePlan.Outcome.KeepWalking -> Unit
-        }
 
-        if (depth >= maxBrowseDepth) {
-            finish(onResult, SearchResult.NotFound("Nothing playable found for \"$query\""))
-            return
-        }
-
-        val listHint = body.optJSONObject("list")?.optString("hint")?.takeIf { it.isNotEmpty() }
-        val load = JSONObject()
-            .put("hierarchy", "search")
-            .put("offset", 0)
-            .put("count", 25)
-        sendRequest(SERVICE_BROWSE, "load", load) { loadMsg ->
-            handleLoad(loadMsg, listHint, zoneId, query, depth, onResult)
-        }
-    }
-
-    private fun handleLoad(
-        msg: Moo.Message,
-        listHint: String?,
-        zoneId: String,
-        query: String,
-        depth: Int,
-        onResult: (SearchResult) -> Unit
-    ) {
-        val body = msg.bodyText?.let { JSONObject(it) }
-        if (msg.name != "Success" || body == null) {
-            finish(onResult, SearchResult.NotFound("Roon returned nothing for that"))
-            return
-        }
-
-        val items = ArrayList<BrowseItem>()
-        body.optJSONArray("items")?.let { arr ->
-            for (i in 0 until arr.length()) items += BrowseItem.parse(arr.getJSONObject(i))
-        }
-        val hint = body.optJSONObject("list")?.optString("hint")?.takeIf { it.isNotEmpty() }
-            ?: listHint
-
-        when (val step = BrowsePlan.next(hint, items)) {
-            is BrowsePlan.Step.GiveUp ->
-                finish(onResult, SearchResult.NotFound(step.reason))
-
-            is BrowsePlan.Step.Play ->
-                browseInto(step.itemKey, zoneId, query, depth + 1, played = true, onResult = onResult)
-
-            is BrowsePlan.Step.Descend ->
-                browseInto(
-                    step.itemKey, zoneId, step.title, depth + 1,
-                    played = false, onResult = onResult
+            when (
+                val outcome = BrowsePlan.afterBrowse(
+                    played = played,
+                    action = body.str("action"),
+                    isError = body.optBoolean("is_error", false),
+                    message = body.str("message")
                 )
-        }
-    }
+            ) {
+                // Roon accepting the action is not the same as the zone
+                // starting, so this asks the zone rather than assuming.
+                is BrowsePlan.Outcome.Playing -> { confirmPlaying(0); return }
+                is BrowsePlan.Outcome.Stop -> { finish(SearchResult.NotFound(outcome.message)); return }
+                is BrowsePlan.Outcome.KeepWalking -> Unit
+            }
 
-    private fun browseInto(
-        itemKey: String,
-        zoneId: String,
-        label: String,
-        depth: Int,
-        played: Boolean,
-        onResult: (SearchResult) -> Unit
-    ) {
-        val body = JSONObject()
-            .put("hierarchy", "search")
-            .put("item_key", itemKey)
-            .put("zone_or_output_id", zoneId)
-        sendRequest(SERVICE_BROWSE, "browse", body) { msg ->
-            handleBrowse(msg, zoneId, label, depth, played, onResult)
+            if (depth >= maxBrowseDepth) {
+                finish(SearchResult.NotFound("Nothing playable found for \"$query\""))
+                return
+            }
+
+            // A new level: everything read from the last one is gone.
+            listHint = body.optJSONObject("list")?.str("hint")?.takeIf { it.isNotEmpty() }
+            items = ArrayList()
+            total = body.optJSONObject("list")?.optInt("count", 0) ?: 0
+            load(0)
+        }
+
+        private fun load(offset: Int) {
+            if (socket == null) {
+                finish(SearchResult.NotFound("Lost the connection to Roon"))
+                return
+            }
+            val body = JSONObject()
+                .put("hierarchy", HIERARCHY)
+                .put("multi_session_key", session)
+                .put("offset", offset)
+                .put("count", BrowsePlan.PAGE)
+            sendRequest(SERVICE_BROWSE, "load", body) { onLoad(it, offset) }
+        }
+
+        private fun onLoad(msg: Moo.Message, offset: Int) {
+            if (finished) return
+            val body = msg.bodyText?.let { JSONObject(it) }
+            if (msg.name != "Success" || body == null) {
+                finish(SearchResult.NotFound("Roon returned nothing for that"))
+                return
+            }
+
+            val page = ArrayList<BrowseItem>()
+            body.optJSONArray("items")?.let { arr ->
+                for (i in 0 until arr.length()) {
+                    arr.optJSONObject(i)?.let { page += BrowseItem.parse(it) }
+                }
+            }
+            val merged = BrowsePlan.merge(items, page, body.optInt("offset", offset))
+            if (merged == null) {
+                // The load added nothing: either it repeated a page already
+                // held or the level is shorter than Roon's own count says.
+                finish(SearchResult.NotFound("Nothing playable found for \"$query\""))
+                return
+            }
+            items = ArrayList(merged)
+            body.optJSONObject("list")?.optInt("count", 0)?.takeIf { it > 0 }?.let { total = it }
+
+            when (val step = BrowsePlan.next(listHint, items, maxOf(total, items.size))) {
+                is BrowsePlan.Step.GiveUp ->
+                    finish(SearchResult.NotFound(step.reason))
+
+                is BrowsePlan.Step.LoadMore ->
+                    load(step.offset)
+
+                is BrowsePlan.Step.Play -> {
+                    val zone = zoneStore.byId(zoneId)
+                    wasPlaying = zone?.isPlaying == true
+                    previousTrack = trackOf(zone)
+                    depth++
+                    label = step.title
+                    into(step.itemKey, played = true)
+                }
+
+                is BrowsePlan.Step.Descend -> {
+                    depth++
+                    label = step.title
+                    into(step.itemKey, played = false)
+                }
+            }
+        }
+
+        private fun into(itemKey: String, played: Boolean) {
+            browse(
+                JSONObject()
+                    .put("hierarchy", HIERARCHY)
+                    .put("multi_session_key", session)
+                    .put("item_key", itemKey)
+                    .put("zone_or_output_id", zoneId),
+                played = played
+            )
+        }
+
+        /**
+         * Waits for the zone to show the play took effect.
+         *
+         * Reporting "Playing X" straight off the browse reply is how the app
+         * said it had started something while the room stayed silent. The zone
+         * feed is the only thing that knows. The ambiguity is a zone that was
+         * already playing the same track: that is reported as success rather
+         * than risk calling a working command a failure.
+         */
+        private fun confirmPlaying(waitedMs: Long) {
+            if (finished) return
+            val zone = zoneStore.byId(zoneId)
+            val track = trackOf(zone)
+            val started = zone?.isPlaying == true && (track != previousTrack || !wasPlaying)
+            if (started) {
+                finish(SearchResult.Playing(track.ifEmpty { label }))
+                return
+            }
+            if (waitedMs >= playConfirmMs) {
+                finish(
+                    if (zone?.isPlaying == true) SearchResult.Playing(track.ifEmpty { label })
+                    else SearchResult.NotFound("Roon didn't start playing \"$query\"")
+                )
+                return
+            }
+            net.postDelayed({ confirmPlaying(waitedMs + playPollMs) }, playPollMs)
+        }
+
+        private fun trackOf(zone: Zone?): String {
+            val np = zone?.nowPlaying ?: return ""
+            return listOf(np.line1, np.line2)
+                .filter { it.isNotBlank() }
+                .joinToString(" — ")
         }
     }
 

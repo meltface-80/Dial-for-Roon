@@ -29,6 +29,9 @@ class VoiceInput(private val context: Context) {
         /** Words so far, while the user is still speaking. */
         fun onPartial(text: String)
         fun onHeard(text: String)
+
+        /** Every hypothesis the recogniser offered, best first. */
+        fun onHeardAny(options: List<String>) = onHeard(options.first())
         fun onFailed(reason: String)
     }
 
@@ -63,11 +66,11 @@ class VoiceInput(private val context: Context) {
 
             override fun onResults(results: Bundle?) {
                 stop()
-                val heard = firstResult(results)
-                if (heard.isNullOrBlank()) {
+                val heard = allResults(results).filter { it.isNotBlank() }
+                if (heard.isEmpty()) {
                     listener.onFailed("Didn't catch that")
                 } else {
-                    listener.onHeard(heard)
+                    listener.onHeardAny(heard)
                 }
             }
 
@@ -83,7 +86,9 @@ class VoiceInput(private val context: Context) {
                 RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
             )
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+            // More than one guess: a command misheard as a title is expensive,
+            // and the right words are often further down the list.
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
             putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, context.packageName)
         }
 
@@ -106,8 +111,10 @@ class VoiceInput(private val context: Context) {
         recognizer = null
     }
 
-    private fun firstResult(bundle: Bundle?): String? =
-        bundle?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
+    private fun firstResult(bundle: Bundle?): String? = allResults(bundle).firstOrNull()
+
+    private fun allResults(bundle: Bundle?): List<String> =
+        bundle?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty()
 
     private fun describe(error: Int): String = when (error) {
         SpeechRecognizer.ERROR_AUDIO -> "Microphone problem"
@@ -119,45 +126,5 @@ class VoiceInput(private val context: Context) {
         SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "Recogniser busy"
         SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "Heard nothing"
         else -> "Speech recognition failed"
-    }
-}
-
-/**
- * Turns what was said into something to search for.
- *
- * People say "play Iron Maiden", not "Iron Maiden" — Roon would search for the
- * word "play" along with the rest and rank the results worse for it.
- */
-object SpokenQuery {
-
-    private val LEADING = listOf(
-        "play some music by ",
-        "play some music from ",
-        "play some ",
-        "play me some ",
-        "play me ",
-        "play the album ",
-        "play album ",
-        "play music by ",
-        "play track ",
-        "play song ",
-        "play ",
-        "put on some ",
-        "put on ",
-        "listen to ",
-        "search for ",
-        "find "
-    )
-
-    fun clean(spoken: String): String {
-        var text = spoken.trim()
-        val lower = text.lowercase()
-        for (prefix in LEADING) {
-            if (lower.startsWith(prefix)) {
-                text = text.substring(prefix.length)
-                break
-            }
-        }
-        return text.trim().trimEnd('.', '!', '?')
     }
 }
