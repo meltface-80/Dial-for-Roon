@@ -565,7 +565,7 @@ class RoonClient(context: Context) : ZoneControl {
                 .put("pop_all", true)
                 .put("zone_or_output_id", zone.zoneId)
             sendRequest(SERVICE_BROWSE, "browse", body) { msg ->
-                handleBrowse(msg, zone.zoneId, trimmed, 0, onResult)
+                handleBrowse(msg, zone.zoneId, trimmed, 0, played = false, onResult = onResult)
             }
         }
     }
@@ -579,6 +579,7 @@ class RoonClient(context: Context) : ZoneControl {
         zoneId: String,
         query: String,
         depth: Int,
+        played: Boolean,
         onResult: (SearchResult) -> Unit
     ) {
         val body = msg.bodyText?.let { JSONObject(it) }
@@ -587,24 +588,24 @@ class RoonClient(context: Context) : ZoneControl {
             return
         }
 
-        when (body.optString("action")) {
-            "list" -> Unit
-            "message" -> {
-                finish(
-                    onResult,
-                    SearchResult.NotFound(body.optString("message").ifEmpty { "Roon had nothing" })
-                )
-                return
+        val outcome = BrowsePlan.afterBrowse(
+            played = played,
+            action = body.optString("action"),
+            isError = body.optBoolean("is_error", false),
+            message = body.optString("message")
+        )
+        when (outcome) {
+            is BrowsePlan.Outcome.Playing -> {
+                finish(onResult, SearchResult.Playing(query)); return
             }
-            else -> {
-                // "none" after a play action: the music has started.
-                finish(onResult, SearchResult.Playing(query))
-                return
+            is BrowsePlan.Outcome.Stop -> {
+                finish(onResult, SearchResult.NotFound(outcome.message)); return
             }
+            is BrowsePlan.Outcome.KeepWalking -> Unit
         }
 
         if (depth >= maxBrowseDepth) {
-            finish(onResult, SearchResult.NotFound("Could not find a way to play that"))
+            finish(onResult, SearchResult.NotFound("Nothing playable found for \"$query\""))
             return
         }
 
@@ -643,10 +644,14 @@ class RoonClient(context: Context) : ZoneControl {
             is BrowsePlan.Step.GiveUp ->
                 finish(onResult, SearchResult.NotFound(step.reason))
 
-            is BrowsePlan.Step.Play -> browseInto(step.itemKey, zoneId, query, depth + 1, onResult)
+            is BrowsePlan.Step.Play ->
+                browseInto(step.itemKey, zoneId, query, depth + 1, played = true, onResult = onResult)
 
             is BrowsePlan.Step.Descend ->
-                browseInto(step.itemKey, zoneId, step.title, depth + 1, onResult)
+                browseInto(
+                    step.itemKey, zoneId, step.title, depth + 1,
+                    played = false, onResult = onResult
+                )
         }
     }
 
@@ -655,6 +660,7 @@ class RoonClient(context: Context) : ZoneControl {
         zoneId: String,
         label: String,
         depth: Int,
+        played: Boolean,
         onResult: (SearchResult) -> Unit
     ) {
         val body = JSONObject()
@@ -662,7 +668,7 @@ class RoonClient(context: Context) : ZoneControl {
             .put("item_key", itemKey)
             .put("zone_or_output_id", zoneId)
         sendRequest(SERVICE_BROWSE, "browse", body) { msg ->
-            handleBrowse(msg, zoneId, label, depth, onResult)
+            handleBrowse(msg, zoneId, label, depth, played, onResult)
         }
     }
 

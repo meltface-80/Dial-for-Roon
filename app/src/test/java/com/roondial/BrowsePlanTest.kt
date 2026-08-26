@@ -95,3 +95,50 @@ class BrowsePlanTest {
         assertEquals(BrowsePlan.Step.Play("k-Play Now", "Play Now"), step)
     }
 }
+
+class BrowseOutcomeTest {
+
+    @Test
+    fun stopsOnceThePlayActionHasBeenSent() {
+        // The bug this pins: Roon answered a play action with a list rather
+        // than "none", the walk carried on, reported failure over music that
+        // was already playing, and fired a second play action on the way.
+        assertEquals(
+            BrowsePlan.Outcome.Playing,
+            BrowsePlan.afterBrowse(played = true, action = "list", isError = false, message = "")
+        )
+        assertEquals(
+            BrowsePlan.Outcome.Playing,
+            BrowsePlan.afterBrowse(played = true, action = "none", isError = false, message = "")
+        )
+    }
+
+    @Test
+    fun anErrorAfterPlayingIsStillAnError() {
+        val outcome =
+            BrowsePlan.afterBrowse(true, "message", isError = true, message = "Zone is busy")
+        assertEquals(BrowsePlan.Outcome.Stop("Zone is busy"), outcome)
+    }
+
+    @Test
+    fun keepsWalkingThroughLevels() {
+        assertEquals(
+            BrowsePlan.Outcome.KeepWalking,
+            BrowsePlan.afterBrowse(false, "list", isError = false, message = "")
+        )
+    }
+
+    @Test
+    fun relaysWhatRoonSaid() {
+        assertEquals(
+            BrowsePlan.Outcome.Stop("No results"),
+            BrowsePlan.afterBrowse(false, "message", isError = false, message = "No results")
+        )
+    }
+
+    @Test
+    fun stillSaysSomethingWhenRoonSendsAnEmptyMessage() {
+        val outcome = BrowsePlan.afterBrowse(false, "message", isError = false, message = "")
+        assertTrue((outcome as BrowsePlan.Outcome.Stop).message.isNotBlank())
+    }
+}

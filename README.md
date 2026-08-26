@@ -15,7 +15,7 @@ Docker, no Node host, no companion service.
 
 ## Install
 
-### [⬇ Download the APK](https://github.com/meltface-80/Display-extension-apk/raw/main/dist/dial-for-roon-0.9.0.apk)
+### [⬇ Download the APK](https://github.com/meltface-80/Display-extension-apk/raw/main/dist/dial-for-roon-0.10.0.apk)
 
 Android 8.0 (API 26) or newer. Sideload it, then once:
 
@@ -77,9 +77,12 @@ volume is two buttons, drawn the size of the transport controls because that is
 what they are: the only way to change volume from the widget, not a hint about
 one.
 
-The targets are weighted thirds rather than measured positions, because a
-widget only ever approximately knows its own size — thirds land on the drawn
-controls at any size and give a finger something generous to hit.
+The targets are placed at runtime with `setViewPadding`, from the same geometry
+DialView uses to draw. A fixed grid cannot do it: the four controls occupy only
+the middle of the dial, so quarter-width cells land nowhere near them — tapping
+the drawn microphone fell in the "next" cell and skipped a track instead. The
+widget's real size comes from its options, which are approximate, but the
+targets are far larger than that error.
 
 The second-by-second progress arc is dropped too: redrawing and re-sending the
 whole image every second is not what a widget is for.

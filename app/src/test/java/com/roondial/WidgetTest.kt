@@ -215,7 +215,7 @@ class WidgetTest {
             R.id.widget_previous, R.id.widget_play_pause, R.id.widget_next,
             R.id.widget_voice,
             R.id.widget_volume_down, R.id.widget_volume_up,
-            R.id.widget_open, R.id.widget_open_centre
+            R.id.widget_open
         )) {
             assertTrue("no click target on ${'$'}id", root.findViewById<View>(id).hasOnClickListeners())
         }
