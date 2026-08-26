@@ -182,10 +182,10 @@ class MainActivity : Activity(), RoonClient.Listener, DialView.Callbacks {
             "Find Core again",
             "Enter Core address…",
             "Voice control status",
-            if (RoonPlaybackService.takesAudioFocus(this)) {
-                "Stop taking audio focus"
+            if (RoonPlaybackService.claimsMediaControlEnabled(this)) {
+                "Stop claiming media control"
             } else {
-                "Take audio focus"
+                "Claim media control (for voice)"
             },
             "About"
         )
@@ -198,7 +198,7 @@ class MainActivity : Activity(), RoonClient.Listener, DialView.Callbacks {
                     2 -> client.rediscover()
                     3 -> showManualAddress()
                     4 -> showVoiceControlStatus()
-                    5 -> toggleAudioFocus()
+                    5 -> toggleMediaControlClaim()
                     6 -> showAbout()
                 }
             }
@@ -236,15 +236,17 @@ class MainActivity : Activity(), RoonClient.Listener, DialView.Callbacks {
             .show()
     }
 
-    private fun toggleAudioFocus() {
-        val enabled = !RoonPlaybackService.takesAudioFocus(this)
-        RoonPlaybackService.setTakesAudioFocus(this, enabled)
+    private fun toggleMediaControlClaim() {
+        val enabled = !RoonPlaybackService.claimsMediaControlEnabled(this)
+        RoonPlaybackService.setClaimsMediaControl(this, enabled)
         Toast.makeText(
             this,
             if (enabled) {
-                "Taking audio focus while the zone plays. This pauses audio in other apps."
+                "Claiming media control while the zone plays: renders silence so " +
+                    "Android treats this as the media app. Costs a little battery."
             } else {
-                "No longer taking audio focus. Voice control may not find the session."
+                "No longer claiming media control. Spoken transport commands will " +
+                    "not reach this app."
             },
             Toast.LENGTH_LONG
         ).show()

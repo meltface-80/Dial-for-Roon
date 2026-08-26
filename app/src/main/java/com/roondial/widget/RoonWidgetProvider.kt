@@ -240,6 +240,16 @@ class RoonWidgetProvider : AppWidgetProvider() {
         }
 
         val client = app.roon
+        // A press is also the moment to bring the media session back: without
+        // the service there is nothing for a voice command or a headset button
+        // to reach afterwards.
+        try {
+            context.startService(
+                Intent(context, com.roondial.media.RoonPlaybackService::class.java)
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "could not start the session service: " + e.message)
+        }
         val main = Handler(Looper.getMainLooper())
         var finished = false
 
